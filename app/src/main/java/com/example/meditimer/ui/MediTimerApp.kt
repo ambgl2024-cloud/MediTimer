@@ -68,7 +68,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (tab) {
-                AppTab.TODAY -> TodayScreen(meds, repo, revision, refresh, requestExactAlarmPermission)
+                AppTab.TODAY -> TodayScreen(meds, repo, revision, ::refresh, requestExactAlarmPermission)
                 AppTab.MEDS -> MedicationListScreen(
                     meds = meds,
                     onAdd = { creating = true },
@@ -80,7 +80,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
                     }
                 )
                 AppTab.ALARMS -> AlarmListScreen(meds, onEdit = { editing = it })
-                AppTab.PACKAGES -> PackageScreen(meds, repo, refresh)
+                AppTab.PACKAGES -> PackageScreen(meds, repo, ::refresh)
             }
         }
     }
