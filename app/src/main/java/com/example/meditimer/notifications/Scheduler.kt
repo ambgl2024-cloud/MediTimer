@@ -8,6 +8,7 @@ import android.os.Build
 import com.example.meditimer.data.ActiveCountdown
 import com.example.meditimer.data.Medication
 import com.example.meditimer.data.MedicationRepository
+import com.example.meditimer.data.PendingSnooze
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
@@ -32,6 +33,9 @@ object Scheduler {
                 pi.cancel()
             }
         }
+        MedicationRepository(context).getPendingSnoozesForMedication(medication.id).forEach { snooze ->
+            cancelSnooze(context, snooze.medicationId, snooze.plannedEpochDay, snooze.plannedTime)
+        }
     }
 
     fun scheduleNextForSlot(context: Context, medication: Medication, time: String, afterMillis: Long = System.currentTimeMillis()) {
@@ -46,12 +50,7 @@ object Scheduler {
                 if (candidate.isAfter(after)) {
                     val trigger = candidate.atZone(zone).toInstant().toEpochMilli()
                     val pi = alarmPendingIntent(context, medication.id, time, PendingIntent.FLAG_UPDATE_CURRENT, date.toEpochDay()) ?: return
-                    val am = context.getSystemService(AlarmManager::class.java)
-                    if (canScheduleExact(context)) {
-                        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
-                    } else {
-                        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
-                    }
+                    scheduleAlarm(context, trigger, pi)
                     return
                 }
             }
@@ -59,18 +58,50 @@ object Scheduler {
         }
     }
 
-    /**
-     * Starts the foreground countdown engine for reliable minute sounds with screen off.
-     * A single exact alarm is also kept for the finish time as a fallback.
-     */
+    fun scheduleSnooze(
+        context: Context,
+        medicationId: Long,
+        plannedEpochDay: Long,
+        plannedTime: String,
+        snoozeMinutes: Int
+    ) {
+        val trigger = System.currentTimeMillis() + snoozeMinutes.coerceAtLeast(1) * 60_000L
+        val snooze = PendingSnooze(medicationId, plannedEpochDay, plannedTime, trigger)
+        MedicationRepository(context).upsertPendingSnooze(snooze)
+        scheduleSnoozeEvent(context, snooze)
+    }
+
+    fun cancelSnooze(context: Context, medicationId: Long, plannedEpochDay: Long, plannedTime: String) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        snoozePendingIntent(context, medicationId, plannedEpochDay, plannedTime, PendingIntent.FLAG_NO_CREATE)?.let { pi ->
+            am.cancel(pi)
+            pi.cancel()
+        }
+        MedicationRepository(context).removePendingSnooze(medicationId, plannedEpochDay, plannedTime)
+    }
+
+    fun restoreSnoozes(context: Context) {
+        val repo = MedicationRepository(context)
+        val now = System.currentTimeMillis()
+        repo.getPendingSnoozes().forEach { snooze ->
+            val med = repo.getMedication(snooze.medicationId)
+            if (med == null || !med.enabled || repo.isTaken(snooze.medicationId, snooze.plannedEpochDay, snooze.plannedTime)) {
+                cancelSnooze(context, snooze.medicationId, snooze.plannedEpochDay, snooze.plannedTime)
+            } else {
+                val restored = if (snooze.triggerAtMillis <= now) snooze.copy(triggerAtMillis = now + 1_000L) else snooze
+                if (restored != snooze) repo.upsertPendingSnooze(restored)
+                scheduleSnoozeEvent(context, restored)
+            }
+        }
+    }
+
+    /** Countdown: no intermediate sounds. Only the final alarm is scheduled. */
     fun scheduleCountdown(context: Context, countdown: ActiveCountdown) {
         scheduleCountdownFinishFallback(context, countdown)
-        CountdownService.start(context)
     }
 
     fun cancelCountdown(context: Context, countdown: ActiveCountdown) {
         cancelCountdownFinishFallback(context, countdown.id)
-        CountdownService.start(context) // refresh/stop itself if no countdowns remain
     }
 
     fun restoreCountdowns(context: Context) {
@@ -80,18 +111,30 @@ object Scheduler {
                 scheduleCountdownFinishFallback(context, countdown)
             }
         }
-        if (repo.getCountdowns().any { it.endMillis > System.currentTimeMillis() }) {
-            CountdownService.start(context)
-        }
+    }
+
+    private fun scheduleSnoozeEvent(context: Context, snooze: PendingSnooze) {
+        val pi = snoozePendingIntent(
+            context,
+            snooze.medicationId,
+            snooze.plannedEpochDay,
+            snooze.plannedTime,
+            PendingIntent.FLAG_UPDATE_CURRENT
+        ) ?: return
+        scheduleAlarm(context, snooze.triggerAtMillis, pi)
     }
 
     private fun scheduleCountdownFinishFallback(context: Context, countdown: ActiveCountdown) {
-        val am = context.getSystemService(AlarmManager::class.java)
         val pi = countdownFinishPendingIntent(context, countdown.id, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
+        scheduleAlarm(context, countdown.endMillis, pi)
+    }
+
+    private fun scheduleAlarm(context: Context, trigger: Long, pi: PendingIntent) {
+        val am = context.getSystemService(AlarmManager::class.java)
         if (canScheduleExact(context)) {
-            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, countdown.endMillis, pi)
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
         } else {
-            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, countdown.endMillis, pi)
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
         }
     }
 
@@ -111,6 +154,28 @@ object Scheduler {
         return PendingIntent.getBroadcast(
             context,
             ("countdown-finish:$countdownId").hashCode(),
+            intent,
+            baseFlag or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun snoozePendingIntent(
+        context: Context,
+        medicationId: Long,
+        plannedEpochDay: Long,
+        plannedTime: String,
+        baseFlag: Int
+    ): PendingIntent? {
+        val intent = Intent(context, AlarmReceiver::class.java).apply {
+            action = AlarmReceiver.ACTION_SNOOZE_ALARM
+            putExtra(AlarmReceiver.EXTRA_MED_ID, medicationId)
+            putExtra(AlarmReceiver.EXTRA_TIME, plannedTime)
+            putExtra(AlarmReceiver.EXTRA_EPOCH_DAY, plannedEpochDay)
+            putExtra(AlarmReceiver.EXTRA_IS_SNOOZE, true)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            ("snooze:$medicationId:$plannedEpochDay:$plannedTime").hashCode(),
             intent,
             baseFlag or PendingIntent.FLAG_IMMUTABLE
         )

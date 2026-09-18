@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import com.example.meditimer.data.MedicationRepository
 
-/** Final-time fallback. Minute cues are handled by CountdownService. */
+/** Fires the final countdown sound and notification. */
 class CountdownReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_FINISH) return
@@ -16,7 +16,6 @@ class CountdownReceiver : BroadcastReceiver() {
         repo.removeCountdown(id)
         SoundHelper.playCountdownFinished(context)
         NotificationHelper.showCountdownFinished(context, countdown.medicationName, countdown.note, id)
-        CountdownService.start(context)
     }
 
     companion object {

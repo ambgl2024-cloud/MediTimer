@@ -24,6 +24,7 @@ class MainActivity : ComponentActivity() {
         NotificationHelper.ensureChannels(this)
         Scheduler.scheduleAll(this)
         Scheduler.restoreCountdowns(this)
+        Scheduler.restoreSnoozes(this)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,6 +32,7 @@ class MainActivity : ComponentActivity() {
         NotificationHelper.ensureChannels(this)
         Scheduler.scheduleAll(this)
         Scheduler.restoreCountdowns(this)
+        Scheduler.restoreSnoozes(this)
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
 
         setContent {
@@ -41,16 +43,6 @@ class MainActivity : ComponentActivity() {
                             startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
                                 data = Uri.parse("package:$packageName")
                             })
-                        }
-                    },
-                    requestBatteryOptimizationExemption = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                data = Uri.parse("package:$packageName")
-                            }
-                            runCatching { startActivity(request) }.getOrElse {
-                                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                            }
                         }
                     }
                 )

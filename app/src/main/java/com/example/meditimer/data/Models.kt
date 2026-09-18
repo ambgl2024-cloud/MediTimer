@@ -24,6 +24,7 @@ data class Medication(
     val countdownEnabled: Boolean = false,
     val countdownMinutes: Int = 0,
     val countdownNote: String = "",
+    val snoozeMinutes: Int = 10,
     val enabled: Boolean = true
 ) {
     fun isActiveOn(date: LocalDate): Boolean {
@@ -55,6 +56,7 @@ data class Medication(
         put("countdownEnabled", countdownEnabled)
         put("countdownMinutes", countdownMinutes)
         put("countdownNote", countdownNote)
+        put("snoozeMinutes", snoozeMinutes)
         put("enabled", enabled)
     }
 
@@ -75,6 +77,7 @@ data class Medication(
             countdownEnabled = o.optBoolean("countdownEnabled", false),
             countdownMinutes = o.optInt("countdownMinutes", 0),
             countdownNote = o.optString("countdownNote"),
+            snoozeMinutes = o.optInt("snoozeMinutes", 10).coerceAtLeast(1),
             enabled = o.optBoolean("enabled", true)
         )
     }
@@ -145,6 +148,32 @@ data class ActiveCountdown(
             endMillis = o.getLong("endMillis"),
             plannedEpochDay = o.optLong("plannedEpochDay", -1),
             plannedTime = o.optString("plannedTime")
+        )
+    }
+}
+
+
+data class PendingSnooze(
+    val medicationId: Long,
+    val plannedEpochDay: Long,
+    val plannedTime: String,
+    val triggerAtMillis: Long
+) {
+    val key: String get() = "$medicationId|$plannedEpochDay|$plannedTime"
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("medicationId", medicationId)
+        put("plannedEpochDay", plannedEpochDay)
+        put("plannedTime", plannedTime)
+        put("triggerAtMillis", triggerAtMillis)
+    }
+
+    companion object {
+        fun fromJson(o: JSONObject) = PendingSnooze(
+            medicationId = o.getLong("medicationId"),
+            plannedEpochDay = o.getLong("plannedEpochDay"),
+            plannedTime = o.getString("plannedTime"),
+            triggerAtMillis = o.getLong("triggerAtMillis")
         )
     }
 }

@@ -1,9 +1,8 @@
 package com.example.meditimer.ui
 
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.Context
-import android.os.Build
-import android.os.PowerManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -37,7 +36,7 @@ private enum class AppTab(val label: String) {
 }
 
 @Composable
-fun MediTimerApp(requestExactAlarmPermission: () -> Unit, requestBatteryOptimizationExemption: () -> Unit) {
+fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     val context = LocalContext.current
     val repo = remember { MedicationRepository(context) }
     var tab by remember { mutableStateOf(AppTab.TODAY) }
@@ -75,7 +74,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit, requestBatteryOptimiza
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (tab) {
-                AppTab.TODAY -> TodayScreen(meds, repo, revision, ::refresh, requestExactAlarmPermission, requestBatteryOptimizationExemption)
+                AppTab.TODAY -> TodayScreen(meds, repo, revision, ::refresh, requestExactAlarmPermission)
                 AppTab.MEDS -> MedicationListScreen(
                     meds = meds,
                     onAdd = { creating = true },
@@ -125,8 +124,7 @@ private fun TodayScreen(
     repo: MedicationRepository,
     revision: Int,
     refresh: () -> Unit,
-    requestExactAlarmPermission: () -> Unit,
-    requestBatteryOptimizationExemption: () -> Unit
+    requestExactAlarmPermission: () -> Unit
 ) {
     val context = LocalContext.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -154,21 +152,6 @@ private fun TodayScreen(
                     Text("Allarmi precisi non abilitati", fontWeight = FontWeight.Bold)
                     Text("Android può ritardare i promemoria. Abilita gli allarmi precisi per avere orari affidabili.")
                     Button(onClick = requestExactAlarmPermission) { Text("Abilita") }
-                }
-            }
-        }
-
-        val batteryUnrestricted = remember(now) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) true
-            else context.getSystemService(PowerManager::class.java)
-                .isIgnoringBatteryOptimizations(context.packageName)
-        }
-        if (!batteryUnrestricted) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Countdown a schermo spento", fontWeight = FontWeight.Bold)
-                    Text("Per rendere affidabile il bip ogni minuto, consenti a MediTimer di funzionare senza ottimizzazione batteria. Il servizio resta attivo solo durante un countdown.")
-                    Button(onClick = requestBatteryOptimizationExemption) { Text("Consenti uso senza restrizioni") }
                 }
             }
         }
@@ -241,6 +224,7 @@ private fun markTaken(context: Context, repo: MedicationRepository, med: Medicat
             takenAtMillis = now
         )
     )
+    Scheduler.cancelSnooze(context, med.id, epochDay, time)
     NotificationManagerCompat.from(context).cancel(NotificationHelper.notificationId(med.id, time))
     if (med.countdownEnabled && med.countdownMinutes > 0) {
         val c = ActiveCountdown(
@@ -293,6 +277,7 @@ private fun MedicationListScreen(
                     Text(med.recurrenceLabel())
                     Text("${med.timesPerActiveDay} assunzion${if (med.timesPerActiveDay == 1) "e" else "i"}/giorno · ${med.alarmTimes.joinToString(" · ")}")
                     Text("Confezione: max ${med.packageMaxDays} giorni")
+                    Text("Snooze: ${med.snoozeMinutes}min")
                     if (med.countdownEnabled) Text("Countdown post-assunzione: ${med.countdownMinutes}min")
                     if (!med.enabled) Text("Sospeso", color = MaterialTheme.colorScheme.error)
                 }
@@ -920,17 +905,15 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
     var monthlyDaysText by remember(initial) { mutableStateOf(initial?.monthlyDays?.sorted()?.joinToString(",") ?: "1,15") }
     var packageDays by remember(initial) { mutableStateOf((initial?.packageMaxDays ?: 30).toString()) }
     var countdownEnabled by remember(initial) { mutableStateOf(initial?.countdownEnabled ?: false) }
-    var countdownMinutes by remember(initial) { mutableStateOf((initial?.countdownMinutes?.takeIf { it > 0 } ?: 30).toString()) }
+    var countdownMinutes by remember(initial) { mutableStateOf((initial?.countdownMinutes?.takeIf { it > 0 } ?: 2).toString()) }
     var countdownNote by remember(initial) { mutableStateOf(initial?.countdownNote.orEmpty()) }
+    var snoozeMinutes by remember(initial) { mutableStateOf((initial?.snoozeMinutes ?: 10).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
 
     fun resizeTimes(newCount: Int) {
         timesCount = newCount.coerceIn(1, 8)
-        times = when {
-            times.size < timesCount -> times + List(timesCount - times.size) { defaultTimeForIndex(times.size + it, timesCount) }
-            times.size > timesCount -> times.take(timesCount)
-            else -> times
-        }
+        val firstTime = times.firstOrNull() ?: "08:00"
+        times = generateEquidistantTimes(firstTime, timesCount)
     }
 
     AlertDialog(
@@ -957,15 +940,36 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                     Text(timesCount.toString(), style = MaterialTheme.typography.titleLarge)
                     OutlinedButton(onClick = { resizeTimes(timesCount + 1) }, enabled = timesCount < 8) { Text("+") }
                 }
+                Text("Orari in formato 24 ore (HH:mm)", style = MaterialTheme.typography.bodySmall)
                 times.take(timesCount).forEachIndexed { index, value ->
-                    OutlinedTextField(
-                        value = value,
-                        onValueChange = { new -> times = times.toMutableList().also { it[index] = new } },
-                        label = { Text("Orario ${index + 1} (HH:mm)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
+                    OutlinedButton(
+                        onClick = {
+                            showTimePicker(context, value) { selected ->
+                                times = if (index == 0 && timesCount > 1) {
+                                    generateEquidistantTimes(selected, timesCount)
+                                } else {
+                                    times.toMutableList().also { it[index] = selected }
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.AccessTime, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Orario ${index + 1}: $value")
+                    }
                 }
+
+                Divider()
+                Text("Snooze avviso", fontWeight = FontWeight.Bold)
+                OutlinedTextField(
+                    snoozeMinutes,
+                    { snoozeMinutes = it.filter(Char::isDigit) },
+                    label = { Text("Snooze tra gli avvisi (minuti)") },
+                    supportingText = { Text("Quando premi Rimanda, l'avviso ricompare dopo questo intervallo.") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
 
                 Text("Ricorrenza", fontWeight = FontWeight.Bold)
                 RecurrencePicker(recurrence) { recurrence = it }
@@ -1026,15 +1030,17 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                 val n = everyN.toIntOrNull() ?: 0
                 val p = packageDays.toIntOrNull() ?: 0
                 val c = countdownMinutes.toIntOrNull() ?: 0
+                val snooze = snoozeMinutes.toIntOrNull() ?: 0
                 val monthly = parseMonthlyDays(monthlyDaysText)
                 error = when {
                     name.isBlank() -> "Inserisci il nome del farmaco."
-                    parsedTimes.any { runCatching { LocalTime.parse(it, DateTimeFormatter.ofPattern("HH:mm")) }.isFailure } -> "Controlla gli orari: usa il formato HH:mm, ad es. 08:30."
+                    parsedTimes.any { runCatching { LocalTime.parse(it, DateTimeFormatter.ofPattern("HH:mm")) }.isFailure } -> "Uno degli orari non è valido."
                     parsedTimes.distinct().size != parsedTimes.size -> "Gli orari delle assunzioni devono essere diversi."
                     recurrence == RecurrenceType.WEEKDAYS && weekdays.isEmpty() -> "Seleziona almeno un giorno della settimana."
                     recurrence == RecurrenceType.EVERY_N_DAYS && n < 1 -> "La ricorrenza deve essere almeno ogni 1 giorno."
                     recurrence == RecurrenceType.MONTHLY_DAYS && monthly.isEmpty() -> "Inserisci almeno un giorno del mese valido (1–31)."
                     p < 1 -> "La durata della confezione deve essere almeno 1 giorno."
+                    snooze < 1 -> "Lo snooze deve essere almeno 1 minuto."
                     countdownEnabled && c < 1 -> "Il countdown deve durare almeno 1 minuto."
                     else -> null
                 }
@@ -1056,6 +1062,7 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                             countdownEnabled = countdownEnabled,
                             countdownMinutes = if (countdownEnabled) c else 0,
                             countdownNote = if (countdownEnabled) countdownNote.trim() else "",
+                            snoozeMinutes = snooze.coerceAtLeast(1),
                             enabled = enabled
                         )
                     )
@@ -1115,9 +1122,28 @@ private fun parseMonthlyDays(text: String): Set<Int> = text.split(",", ";", " ")
     .filter { it in 1..31 }
     .toSet()
 
-private fun defaultTimeForIndex(index: Int, total: Int): String {
-    val defaults = listOf("08:00", "13:00", "20:00", "23:00", "06:00", "10:00", "16:00", "18:00")
-    return defaults.getOrElse(index) { "08:00" }
+private fun showTimePicker(context: Context, initial: String, onSelected: (String) -> Unit) {
+    val parsed = runCatching { LocalTime.parse(initial, DateTimeFormatter.ofPattern("HH:mm")) }
+        .getOrDefault(LocalTime.of(8, 0))
+    TimePickerDialog(
+        context,
+        { _, hour, minute -> onSelected(String.format("%02d:%02d", hour, minute)) },
+        parsed.hour,
+        parsed.minute,
+        true
+    ).show()
+}
+
+private fun generateEquidistantTimes(firstTime: String, count: Int): List<String> {
+    val safeCount = count.coerceIn(1, 8)
+    val start = runCatching { LocalTime.parse(firstTime, DateTimeFormatter.ofPattern("HH:mm")) }
+        .getOrDefault(LocalTime.of(8, 0))
+    val startMinutes = start.hour * 60 + start.minute
+    return (0 until safeCount).map { index ->
+        val offset = kotlin.math.round(index * 1440.0 / safeCount).toInt()
+        val totalMinutes = (startMinutes + offset) % 1440
+        String.format("%02d:%02d", totalMinutes / 60, totalMinutes % 60)
+    }
 }
 
 private fun millisToTime(millis: Long): String = Instant.ofEpochMilli(millis)

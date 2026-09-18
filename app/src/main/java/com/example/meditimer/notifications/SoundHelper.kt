@@ -9,10 +9,6 @@ import android.os.PowerManager
 import com.example.meditimer.R
 
 object SoundHelper {
-    fun playMinuteTick(context: Context) {
-        playRaw(context, R.raw.countdown_tick)
-    }
-
     fun playCountdownFinished(context: Context) {
         playRaw(context, R.raw.countdown_finish)
     }

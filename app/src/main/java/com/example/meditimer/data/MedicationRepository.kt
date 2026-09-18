@@ -27,6 +27,7 @@ class MedicationRepository(context: Context) {
         }
         saveArray("medications", getMedications().filterNot { it.id == id }.map { it.toJson() })
         saveArray("countdowns", getCountdownsRaw().filterNot { it.medicationId == id }.map { it.toJson() })
+        saveArray("snoozes", getPendingSnoozes().filterNot { it.medicationId == id }.map { it.toJson() })
     }
 
     fun getIntakes(): List<IntakeEvent> = parseArray("intakes") { IntakeEvent.fromJson(it) }
@@ -88,6 +89,29 @@ class MedicationRepository(context: Context) {
 
     fun removeCountdown(id: Long) {
         saveArray("countdowns", getCountdownsRaw().filterNot { it.id == id }.map { it.toJson() })
+    }
+
+    fun getPendingSnoozes(): List<PendingSnooze> =
+        parseArray("snoozes") { PendingSnooze.fromJson(it) }.sortedBy { it.triggerAtMillis }
+
+    fun getPendingSnoozesForMedication(medicationId: Long): List<PendingSnooze> =
+        getPendingSnoozes().filter { it.medicationId == medicationId }
+
+    fun upsertPendingSnooze(snooze: PendingSnooze) {
+        val list = getPendingSnoozes().filterNot { it.key == snooze.key }.toMutableList()
+        list.add(snooze)
+        saveArray("snoozes", list.map { it.toJson() })
+    }
+
+    fun removePendingSnooze(medicationId: Long, epochDay: Long, plannedTime: String) {
+        saveArray(
+            "snoozes",
+            getPendingSnoozes().filterNot {
+                it.medicationId == medicationId &&
+                    it.plannedEpochDay == epochDay &&
+                    it.plannedTime == plannedTime
+            }.map { it.toJson() }
+        )
     }
 
     fun mergeImportedIntakes(events: List<IntakeEvent>): Int {
