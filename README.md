@@ -37,3 +37,7 @@ Il workflow compila `assembleRelease`, verifica il fingerprint della chiave Medi
 ## Permessi Android
 
 MediTimer richiede solo i permessi necessari per notifiche, allarmi precisi, reboot e vibrazione. Non richiede più l'esclusione dalle ottimizzazioni batteria né un foreground service per il countdown.
+
+## Nota aggiornamento v0.5.1 FIX
+
+Il browser uploader di GitHub sovrascrive i file presenti ma non elimina automaticamente i file rimossi dal progetto. Per questo il pacchetto include un `CountdownService.kt` neutro che sovrascrive eventuali copie obsolete provenienti dalle versioni precedenti. Il servizio non viene utilizzato dall'app.
