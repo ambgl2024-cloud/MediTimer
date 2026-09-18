@@ -2,6 +2,8 @@ package com.example.meditimer.ui
 
 import android.app.DatePickerDialog
 import android.content.Context
+import android.os.Build
+import android.os.PowerManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -35,7 +37,7 @@ private enum class AppTab(val label: String) {
 }
 
 @Composable
-fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
+fun MediTimerApp(requestExactAlarmPermission: () -> Unit, requestBatteryOptimizationExemption: () -> Unit) {
     val context = LocalContext.current
     val repo = remember { MedicationRepository(context) }
     var tab by remember { mutableStateOf(AppTab.TODAY) }
@@ -73,7 +75,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (tab) {
-                AppTab.TODAY -> TodayScreen(meds, repo, revision, ::refresh, requestExactAlarmPermission)
+                AppTab.TODAY -> TodayScreen(meds, repo, revision, ::refresh, requestExactAlarmPermission, requestBatteryOptimizationExemption)
                 AppTab.MEDS -> MedicationListScreen(
                     meds = meds,
                     onAdd = { creating = true },
@@ -123,7 +125,8 @@ private fun TodayScreen(
     repo: MedicationRepository,
     revision: Int,
     refresh: () -> Unit,
-    requestExactAlarmPermission: () -> Unit
+    requestExactAlarmPermission: () -> Unit,
+    requestBatteryOptimizationExemption: () -> Unit
 ) {
     val context = LocalContext.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -151,6 +154,21 @@ private fun TodayScreen(
                     Text("Allarmi precisi non abilitati", fontWeight = FontWeight.Bold)
                     Text("Android può ritardare i promemoria. Abilita gli allarmi precisi per avere orari affidabili.")
                     Button(onClick = requestExactAlarmPermission) { Text("Abilita") }
+                }
+            }
+        }
+
+        val batteryUnrestricted = remember(now) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) true
+            else context.getSystemService(PowerManager::class.java)
+                .isIgnoringBatteryOptimizations(context.packageName)
+        }
+        if (!batteryUnrestricted) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Countdown a schermo spento", fontWeight = FontWeight.Bold)
+                    Text("Per rendere affidabile il bip ogni minuto, consenti a MediTimer di funzionare senza ottimizzazione batteria. Il servizio resta attivo solo durante un countdown.")
+                    Button(onClick = requestBatteryOptimizationExemption) { Text("Consenti uso senza restrizioni") }
                 }
             }
         }

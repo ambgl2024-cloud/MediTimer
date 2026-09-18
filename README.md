@@ -1,8 +1,22 @@
-# MediTimer Android — v0.4.0
+# MediTimer Android — v0.4.2
 
+
+## Hotfix v0.4.2 — beep del countdown a schermo spento
+
+Il beep minuto-per-minuto ora usa un **foreground service `mediaPlayback`**, un thread dedicato e un `PARTIAL_WAKE_LOCK`. Prima veniva usato un servizio `specialUse` con timer sul main looper: su alcuni telefoni il processo veniva congelato quando il display si spegneva, mentre l'exact alarm finale continuava a funzionare.
+
+La scheda **Oggi** segnala inoltre quando Android sta applicando l'ottimizzazione batteria a MediTimer e consente di richiedere **uso batteria senza restrizioni**. Questa autorizzazione è raccomandata per i beep intermedi a schermo spento. L'exact alarm finale resta attivo come fallback indipendente.
 MediTimer è un'app Android locale/offline per gestire farmaci periodici, promemoria, countdown post-assunzione, cambio confezione e storico delle assunzioni.
 
-## Novità v0.4.0
+## Novità v0.4.2
+
+### Correzione firma stabile
+
+La v0.4.0 caricata su GitHub continuava a usare il vecchio workflow `assembleDebug`; per questo Android non riconosceva gli APK successivi come aggiornamenti. La v0.4.2 compila esclusivamente `assembleRelease`, ricostruisce il keystore dai GitHub Secrets e verifica il fingerprint SHA-256 della chiave stabile prima della build. Se la chiave non è quella attesa, la build fallisce.
+
+**Attenzione:** se sul telefono è installata una build debug precedente, serve ancora una disinstallazione una tantum prima di installare la prima v0.4.2 release firmata stabilmente. Da quel momento in poi, mantenendo gli stessi Secrets, gli aggiornamenti saranno installabili sopra la versione esistente.
+
+## Funzioni v0.4.0 mantenute
 
 ### Countdown affidabile anche a schermo spento
 

@@ -1,18 +1,42 @@
-MEDITIMER v0.4.0 - AGGIORNAMENTO
+MEDI TIMER v0.4.2 - CORREZIONE FIRMA STABILE
+================================================
 
-1. NON modificare i 4 GitHub Actions Secrets già configurati per la firma stabile.
-2. Estrai questo ZIP sul PC.
-3. Nel repository GitHub MediTimer carica/sovrascrivi il contenuto del pacchetto.
-4. Fai Commit changes su main.
-5. Vai in Actions e attendi Build MediTimer APK.
-6. Se la build è verde, scarica l'artifact MediTimer-APK.
-7. Estrai app-release.apk e installalo sopra la versione firmata stabile precedente.
+PROBLEMA TROVATO
+Nel repository GitHub era rimasto il vecchio workflow che eseguiva:
+  gradle :app:assembleDebug
+Quindi ogni build usava la firma debug del runner GitHub e Android rifiutava gli aggiornamenti in-place.
 
-NOVITA PRINCIPALI:
-- bip ogni minuto affidabile anche con schermo spento tramite foreground service + wake lock;
-- suono finale invariato;
-- import CSV del Calendario;
-- modalità Aggiungi e Sostituisci storico;
-- controllo duplicati e righe non valide;
-- modifica/cancellazione eventi storico mantenuta;
-- firma stabile invariata.
+COSA FARE
+1. Conserva i 4 GitHub Actions Secrets già creati: NON cambiarli.
+2. Carica tutti i file di questo pacchetto sovrascrivendo quelli esistenti.
+3. IMPORTANTE: la cartella .github è nascosta in Windows. Verifica su GitHub che il file:
+   .github/workflows/build-apk.yml
+   contenga 'assembleRelease' e NON 'assembleDebug'.
+4. Se la cartella .github non viene caricata dal PC, apri su GitHub:
+   .github/workflows/build-apk.yml
+   e sostituisci tutto il contenuto con il file visibile:
+   build-apk_RELEASE_STABLE.yml
+5. Fai Commit changes.
+6. In Actions la build deve mostrare gli step:
+   - Validate stable signing secrets
+   - Restore stable signing keystore
+   - Verify expected signing key
+   - Build signed release APK
+   - Verify APK signature
+7. Scarica l'artifact MediTimer-APK. Dentro deve esserci app-release.apk.
+   Se trovi app-debug.apk, NON installarlo: il workflow non è stato aggiornato.
+
+PRIMA INSTALLAZIONE DELLA FIRMA STABILE
+La v0.4.0 che hai installato era firmata in debug. Non è tecnicamente possibile trasformarla in-place nella nuova firma release.
+Prima di disinstallarla, esporta lo storico CSV. Poi:
+- disinstalla la vecchia build una sola volta;
+- installa app-release.apk v0.4.2;
+- reimporta il CSV;
+- configura nuovamente i farmaci attivi se necessario.
+
+Dalla v0.4.2 in poi, se il workflow resta invariato e i Secrets non cambiano, non dovrai più disinstallare l'app per aggiornare.
+
+IMPORTANTE v0.4.2:
+- .github/workflows/build-apk.yml deve contenere assembleRelease, NON assembleDebug.
+- Se Windows non mostra la cartella .github, usa il file visibile build-apk_RELEASE_STABLE.yml per aggiornare manualmente il workflow da GitHub.
+- Non modificare i 4 GitHub Secrets della firma stabile.

@@ -42,6 +42,16 @@ class MainActivity : ComponentActivity() {
                                 data = Uri.parse("package:$packageName")
                             })
                         }
+                    },
+                    requestBatteryOptimizationExemption = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:$packageName")
+                            }
+                            runCatching { startActivity(request) }.getOrElse {
+                                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                            }
+                        }
                     }
                 )
             }
