@@ -2,7 +2,6 @@ package com.example.meditimer.data
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -15,7 +14,7 @@ data class Medication(
     val doseNote: String = "",
     val timesPerActiveDay: Int = 1,
     val recurrenceType: RecurrenceType = RecurrenceType.DAILY,
-    val weekdays: Set<Int> = emptySet(), // ISO: Monday=1 ... Sunday=7
+    val weekdays: Set<Int> = emptySet(),
     val everyNDays: Int = 1,
     val anchorEpochDay: Long = LocalDate.now().toEpochDay(),
     val monthlyDays: Set<Int> = emptySet(),
@@ -83,23 +82,28 @@ data class Medication(
 
 data class IntakeEvent(
     val medicationId: Long,
+    val medicationName: String = "",
     val plannedEpochDay: Long,
     val plannedTime: String,
     val takenAtMillis: Long
 ) {
     val key: String get() = "$medicationId|$plannedEpochDay|$plannedTime"
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("medicationId", medicationId)
+        put("medicationName", medicationName)
         put("plannedEpochDay", plannedEpochDay)
         put("plannedTime", plannedTime)
         put("takenAtMillis", takenAtMillis)
     }
+
     companion object {
         fun fromJson(o: JSONObject) = IntakeEvent(
-            o.getLong("medicationId"),
-            o.getLong("plannedEpochDay"),
-            o.getString("plannedTime"),
-            o.getLong("takenAtMillis")
+            medicationId = o.getLong("medicationId"),
+            medicationName = o.optString("medicationName"),
+            plannedEpochDay = o.getLong("plannedEpochDay"),
+            plannedTime = o.getString("plannedTime"),
+            takenAtMillis = o.getLong("takenAtMillis")
         )
     }
 }
@@ -110,7 +114,9 @@ data class ActiveCountdown(
     val medicationName: String,
     val note: String,
     val startMillis: Long,
-    val endMillis: Long
+    val endMillis: Long,
+    val plannedEpochDay: Long = -1,
+    val plannedTime: String = ""
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -119,7 +125,10 @@ data class ActiveCountdown(
         put("note", note)
         put("startMillis", startMillis)
         put("endMillis", endMillis)
+        put("plannedEpochDay", plannedEpochDay)
+        put("plannedTime", plannedTime)
     }
+
     companion object {
         fun fromJson(o: JSONObject) = ActiveCountdown(
             id = o.getLong("id"),
@@ -127,7 +136,9 @@ data class ActiveCountdown(
             medicationName = o.getString("medicationName"),
             note = o.optString("note"),
             startMillis = o.getLong("startMillis"),
-            endMillis = o.getLong("endMillis")
+            endMillis = o.getLong("endMillis"),
+            plannedEpochDay = o.optLong("plannedEpochDay", -1),
+            plannedTime = o.optString("plannedTime")
         )
     }
 }
@@ -148,6 +159,7 @@ private fun JSONArray?.toIntSet(): Set<Int> {
     if (this == null) return emptySet()
     return buildSet { for (i in 0 until length()) add(optInt(i)) }
 }
+
 private fun JSONArray?.toStringList(): List<String> {
     if (this == null) return emptyList()
     return buildList { for (i in 0 until length()) add(optString(i)) }

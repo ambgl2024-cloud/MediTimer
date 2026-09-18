@@ -18,9 +18,15 @@ class MedicationRepository(context: Context) {
     }
 
     fun deleteMedication(id: Long) {
+        val med = getMedication(id)
+        if (med != null) {
+            val enriched = getIntakes().map {
+                if (it.medicationId == id && it.medicationName.isBlank()) it.copy(medicationName = med.name) else it
+            }
+            saveArray("intakes", enriched.map { it.toJson() })
+        }
         saveArray("medications", getMedications().filterNot { it.id == id }.map { it.toJson() })
-        saveArray("intakes", getIntakes().filterNot { it.medicationId == id }.map { it.toJson() })
-        saveArray("countdowns", getActiveCountdowns().filterNot { it.medicationId == id }.map { it.toJson() })
+        saveArray("countdowns", getCountdownsRaw().filterNot { it.medicationId == id }.map { it.toJson() })
     }
 
     fun getIntakes(): List<IntakeEvent> = parseArray("intakes") { IntakeEvent.fromJson(it) }
@@ -28,9 +34,17 @@ class MedicationRepository(context: Context) {
     fun recordIntake(event: IntakeEvent) {
         val list = getIntakes().filterNot { it.key == event.key }.toMutableList()
         list.add(event)
-        // Keep the MVP store bounded to recent history.
-        val trimmed = list.sortedByDescending { it.takenAtMillis }.take(1000)
+        val trimmed = list.sortedByDescending { it.takenAtMillis }.take(5000)
         saveArray("intakes", trimmed.map { it.toJson() })
+    }
+
+    fun removeIntake(medicationId: Long, epochDay: Long, plannedTime: String) {
+        saveArray(
+            "intakes",
+            getIntakes().filterNot {
+                it.medicationId == medicationId && it.plannedEpochDay == epochDay && it.plannedTime == plannedTime
+            }.map { it.toJson() }
+        )
     }
 
     fun isTaken(medicationId: Long, epochDay: Long, plannedTime: String): Boolean =
@@ -43,8 +57,13 @@ class MedicationRepository(context: Context) {
 
     fun getCountdown(id: Long): ActiveCountdown? = getCountdownsRaw().firstOrNull { it.id == id }
 
+    fun getCountdownsForIntake(medicationId: Long, epochDay: Long, plannedTime: String): List<ActiveCountdown> =
+        getCountdownsRaw().filter {
+            it.medicationId == medicationId && it.plannedEpochDay == epochDay && it.plannedTime == plannedTime
+        }
+
     fun addCountdown(countdown: ActiveCountdown) {
-        val list = getActiveCountdowns().toMutableList()
+        val list = getCountdownsRaw().filterNot { it.id == countdown.id }.toMutableList()
         list.add(countdown)
         saveArray("countdowns", list.map { it.toJson() })
     }

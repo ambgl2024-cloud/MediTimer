@@ -15,7 +15,7 @@ import com.example.meditimer.data.Medication
 
 object NotificationHelper {
     const val CHANNEL_MED = "medication_alarm_v1"
-    const val CHANNEL_COUNTDOWN = "countdown_alarm_v1"
+    const val CHANNEL_COUNTDOWN = "countdown_alarm_v2"
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -33,7 +33,7 @@ object NotificationHelper {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_COUNTDOWN, "Fine countdown", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Avvisi al termine dell'attesa dopo l'assunzione"
-                setSound(alarmUri, attrs)
+                setSound(null, null)
                 enableVibration(true)
             }
         )

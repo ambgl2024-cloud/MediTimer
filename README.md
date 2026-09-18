@@ -1,59 +1,70 @@
-# MediTimer MVP — Android
+# MediTimer Android MVP — v0.2.0
 
-MVP Android nativo in Kotlin + Jetpack Compose per:
+MediTimer è un MVP Android locale/offline per gestire farmaci periodici, promemoria, countdown post-assunzione, cambio confezione e storico delle assunzioni.
 
-- anagrafica farmaci;
-- ricorrenze: ogni giorno, giorni della settimana, ogni N giorni, giorni specifici del mese;
-- 1–8 assunzioni nei giorni attivi con orari indipendenti;
-- notifiche locali con pulsante **Farmaco assunto**;
-- countdown post-assunzione configurabile per ciascun farmaco;
-- notifica alla fine del countdown, anche con app chiusa;
-- data ultimo cambio confezione, durata massima e prossimo cambio;
-- storico tecnico delle assunzioni salvato localmente (fino a 1.000 eventi);
-- ripristino degli allarmi dopo riavvio del telefono.
+## Funzioni principali
 
-## Privacy
+- Farmaci con nome, dose/nota e stato attivo/sospeso.
+- Ricorrenze: ogni giorno, giorni della settimana, ogni N giorni, giorni del mese.
+- Più orari di assunzione per ciascun giorno attivo.
+- Promemoria Android tramite AlarmManager.
+- Scheda **Oggi** con stato della dose.
+- Pulsante **Assunto** e possibilità di correggere con **Non assunto**.
+- Countdown post-assunzione configurabile per farmaco.
+- Beep breve ogni minuto trascorso durante il countdown.
+- Suono differente al termine del countdown + notifica di fine attesa.
+- Gestione cambio confezione.
+- Scheda **Calendario** con data e ora effettiva delle assunzioni.
+- Lo storico rimane anche se il farmaco viene eliminato dall'anagrafica.
+- Export dello storico in CSV UTF-8 compatibile con Excel (separatore `;`).
 
-L'MVP è offline: salva i dati localmente sul telefono tramite SharedPreferences/JSON. Non usa account, server o cloud.
+## Comportamento storico
 
-## Requisiti
+Quando premi **Assunto**, viene salvato un evento contenente:
 
-- Android Studio recente
-- JDK 17
-- Android SDK 35
-- Min Android: 8.0 (API 26)
+- ID farmaco;
+- nome del farmaco al momento dell'assunzione;
+- data/orario programmati;
+- timestamp reale dell'assunzione.
 
-## Avvio
+Se successivamente elimini il farmaco, vengono cancellati anagrafica, sveglie e countdown attivi, ma **non le assunzioni storiche**.
 
-1. Apri la cartella `MediTimerMVP` in Android Studio.
-2. Se Android Studio segnala che manca `gradle-wrapper.jar`, esegui una volta `./gradlew --version` (Windows: `gradlew.bat --version`): lo script scarica il wrapper ufficiale Gradle 8.9.
-3. Lascia che Gradle scarichi le dipendenze.
-4. Esegui `app` su telefono/emulatore Android.
-5. Al primo avvio consenti le notifiche.
-6. Su Android 12+ premi **Abilita** nel banner “Allarmi precisi non abilitati” e autorizza gli allarmi precisi.
+## Correzione di un'assunzione
 
-## Logica degli allarmi
+Se premi per errore **Assunto**, nella scheda Oggi puoi premere **Non assunto**. Questo:
 
-Per ogni orario di un farmaco viene pianificata solo la prossima occorrenza valida. Quando l'allarme scatta, il receiver programma la successiva. Questo evita di memorizzare centinaia di PendingIntent.
+1. elimina la registrazione storica di quella dose;
+2. interrompe l'eventuale countdown collegato;
+3. riporta la dose allo stato da assumere.
 
-Il pulsante **Farmaco assunto**, disponibile sia nell'app sia nella notifica:
+## Export CSV
 
-1. registra data/ora dell'assunzione;
-2. marca l'assunzione come completata;
-3. se configurato, crea un countdown;
-4. pianifica una notifica esatta alla fine dell'attesa.
+Nella scheda **Calendario**, premi `CSV`. Android chiederà dove salvare il file.
 
-Il countdown non richiede un processo continuamente attivo: viene memorizzata l'ora di fine e viene usato `AlarmManager`.
+Colonne esportate:
 
-## Limiti intenzionali dell'MVP
+- Data
+- Ora assunzione
+- Farmaco
+- Data prevista
+- Ora prevista
+- Timestamp
 
-- Nessun login, cloud o sincronizzazione tra dispositivi.
-- Nessuna modifica/eliminazione dello storico assunzioni dalla UI.
-- Nessun “snooze” della dose.
-- Nessuna notifica anticipata per cambio confezione: la scadenza è visibile nella sezione Confezioni.
-- Ricorrenza mensile implementata tramite giorni del mese (es. 1, 10, 20), non ancora tramite formule tipo “secondo lunedì del mese”.
-- Se l'utente nega gli allarmi esatti, Android può ritardare le notifiche.
+## Build automatica
 
-## Nota importante
+Il repository contiene `.github/workflows/build-apk.yml`.
 
-L'app è un promemoria personale e non interpreta prescrizioni mediche, interazioni o dosaggi. Le regole vanno inserite dall'utente in base alle indicazioni ricevute dal professionista sanitario o al foglietto illustrativo.
+Ogni push su `main` compila automaticamente l'APK e crea l'artifact `MediTimer-APK`.
+
+APK generato:
+
+`app/build/outputs/apk/debug/app-debug.apk`
+
+## Permessi Android
+
+Al primo utilizzo autorizzare:
+
+- notifiche;
+- allarmi precisi, quando richiesto.
+
+I dati dell'MVP sono salvati localmente sul telefono tramite SharedPreferences.

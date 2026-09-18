@@ -5,11 +5,9 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.provider.Settings
 import com.example.meditimer.data.ActiveCountdown
 import com.example.meditimer.data.Medication
 import com.example.meditimer.data.MedicationRepository
-import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
@@ -61,24 +59,52 @@ object Scheduler {
         }
     }
 
-    fun scheduleCountdown(context: Context, countdown: ActiveCountdown) {
-        val am = context.getSystemService(AlarmManager::class.java)
-        val intent = Intent(context, CountdownReceiver::class.java).apply {
-            putExtra(CountdownReceiver.EXTRA_COUNTDOWN_ID, countdown.id)
-            putExtra(CountdownReceiver.EXTRA_MED_NAME, countdown.medicationName)
-            putExtra(CountdownReceiver.EXTRA_NOTE, countdown.note)
+    fun scheduleCountdown(context: Context, countdown: ActiveCountdown, afterMillis: Long = System.currentTimeMillis()) {
+        if (countdown.endMillis <= afterMillis) {
+            scheduleCountdownEvent(context, countdown, countdown.endMillis, CountdownReceiver.ACTION_FINISH)
+            return
         }
-        val pi = PendingIntent.getBroadcast(
-            context,
-            countdown.id.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        if (canScheduleExact(context)) {
-            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, countdown.endMillis, pi)
+
+        val elapsed = ((afterMillis - countdown.startMillis).coerceAtLeast(0L) / 60_000L)
+        val nextMinuteMark = countdown.startMillis + (elapsed + 1L) * 60_000L
+        if (nextMinuteMark < countdown.endMillis) {
+            scheduleCountdownEvent(context, countdown, nextMinuteMark, CountdownReceiver.ACTION_TICK)
         } else {
-            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, countdown.endMillis, pi)
+            scheduleCountdownEvent(context, countdown, countdown.endMillis, CountdownReceiver.ACTION_FINISH)
         }
+    }
+
+    fun cancelCountdown(context: Context, countdown: ActiveCountdown) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        listOf(CountdownReceiver.ACTION_TICK, CountdownReceiver.ACTION_FINISH).forEach { action ->
+            countdownPendingIntent(context, countdown.id, action, PendingIntent.FLAG_NO_CREATE)?.let { pi ->
+                am.cancel(pi)
+                pi.cancel()
+            }
+        }
+    }
+
+    private fun scheduleCountdownEvent(context: Context, countdown: ActiveCountdown, trigger: Long, action: String) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        val pi = countdownPendingIntent(context, countdown.id, action, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
+        if (canScheduleExact(context)) {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
+        } else {
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
+        }
+    }
+
+    private fun countdownPendingIntent(context: Context, countdownId: Long, action: String, baseFlag: Int): PendingIntent? {
+        val intent = Intent(context, CountdownReceiver::class.java).apply {
+            this.action = action
+            putExtra(CountdownReceiver.EXTRA_COUNTDOWN_ID, countdownId)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            ("countdown:$countdownId:$action").hashCode(),
+            intent,
+            baseFlag or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun alarmPendingIntent(

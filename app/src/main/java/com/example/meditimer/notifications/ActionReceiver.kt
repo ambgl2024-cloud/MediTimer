@@ -18,7 +18,17 @@ class ActionReceiver : BroadcastReceiver() {
         val repo = MedicationRepository(context)
         val med = repo.getMedication(medId) ?: return
         val now = System.currentTimeMillis()
-        repo.recordIntake(IntakeEvent(medId, epochDay, time, now))
+
+        repo.recordIntake(
+            IntakeEvent(
+                medicationId = medId,
+                medicationName = med.name,
+                plannedEpochDay = epochDay,
+                plannedTime = time,
+                takenAtMillis = now
+            )
+        )
+
         if (med.countdownEnabled && med.countdownMinutes > 0) {
             val countdown = ActiveCountdown(
                 id = now + medId,
@@ -26,7 +36,9 @@ class ActionReceiver : BroadcastReceiver() {
                 medicationName = med.name,
                 note = med.countdownNote,
                 startMillis = now,
-                endMillis = now + med.countdownMinutes * 60_000L
+                endMillis = now + med.countdownMinutes * 60_000L,
+                plannedEpochDay = epochDay,
+                plannedTime = time
             )
             repo.addCountdown(countdown)
             Scheduler.scheduleCountdown(context, countdown)

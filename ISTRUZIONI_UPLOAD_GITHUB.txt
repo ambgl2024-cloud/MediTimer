@@ -1,21 +1,24 @@
-MediTimer - pacchetto corretto v2
-18/09/2026
+MEDITIMER v0.2.0 - AGGIORNAMENTO
 
-CORREZIONI PRINCIPALI
-- Corretto MediTimerApp.kt: passaggio delle callback refresh con ::refresh.
-- Workflow GitHub Actions senza android-actions/setup-android@v3.
-- Android SDK 35 installato direttamente tramite sdkmanager.
-- Build con JDK 17, Gradle 8.9 e Android Gradle Plugin 8.7.3.
+1. Estrai completamente questo ZIP sul PC.
+2. Apri il repository GitHub MediTimer.
+3. Add file -> Upload files.
+4. Carica/sovrascrivi il contenuto del pacchetto.
+5. Verifica che resti presente anche:
+   .github/workflows/build-apk.yml
+6. Premi Commit changes.
+7. Vai in Actions -> Build MediTimer APK.
+8. Attendi il segno verde.
+9. Apri il run completato e scarica l'artifact MediTimer-APK.
+10. Estrai app-debug.apk e installalo sul telefono.
 
-COME AGGIORNARE IL REPOSITORY ESISTENTE
-1. Estrarre questo ZIP sul PC.
-2. Aprire il repository GitHub ambgl2024-cloud/MediTimer.
-3. Add file > Upload files.
-4. Trascinare il contenuto estratto (app, gradle e i file nella root).
-5. Se Windows non mostra la cartella .github, NON e' un problema: nel repository GitHub esiste gia' il workflow corretto che ha superato gli step SDK/Gradle nell'ultimo run.
-6. Commit changes.
-7. Il commit avvia automaticamente Build MediTimer APK.
-8. Se la build e' verde, aprire il run e scaricare Artifacts > MediTimer-APK.
-9. Estrarre l'artifact: contiene app-debug.apk da installare sul telefono.
+L'aggiornamento usa lo stesso applicationId, quindi Android dovrebbe proporre l'aggiornamento dell'app esistente mantenendo i dati locali.
 
-Se GitHub chiede conferma per sostituire file gia' esistenti, confermare l'aggiornamento.
+Novita' v0.2.0:
+- pulsante Non assunto per annullare un Assunto errato;
+- annullamento del countdown collegato;
+- beep ogni minuto del countdown;
+- suono differente a 0;
+- nuova scheda Calendario;
+- storico persistente anche dopo eliminazione del farmaco;
+- export CSV.

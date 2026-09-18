@@ -2,6 +2,8 @@ package com.example.meditimer.ui
 
 import android.app.DatePickerDialog
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -28,7 +30,9 @@ import java.time.format.DateTimeFormatter
 import java.util.Calendar
 import kotlin.math.max
 
-private enum class AppTab(val label: String) { TODAY("Oggi"), MEDS("Farmaci"), ALARMS("Sveglie"), PACKAGES("Confezioni") }
+private enum class AppTab(val label: String) {
+    TODAY("Oggi"), MEDS("Farmaci"), ALARMS("Sveglie"), PACKAGES("Confezioni"), CALENDAR("Calendario")
+}
 
 @Composable
 fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
@@ -56,6 +60,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
                                     AppTab.MEDS -> Icons.Default.Medication
                                     AppTab.ALARMS -> Icons.Default.Alarm
                                     AppTab.PACKAGES -> Icons.Default.Inventory2
+                                    AppTab.CALENDAR -> Icons.Default.CalendarMonth
                                 },
                                 contentDescription = item.label
                             )
@@ -75,12 +80,14 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
                     onEdit = { editing = it },
                     onDelete = { med ->
                         Scheduler.cancelMedication(context, med)
+                        repo.getActiveCountdowns().filter { it.medicationId == med.id }.forEach { Scheduler.cancelCountdown(context, it) }
                         repo.deleteMedication(med.id)
                         refresh()
                     }
                 )
                 AppTab.ALARMS -> AlarmListScreen(meds, onEdit = { editing = it })
                 AppTab.PACKAGES -> PackageScreen(meds, repo, ::refresh)
+                AppTab.CALENDAR -> CalendarScreen(repo, meds, revision)
             }
         }
     }
@@ -182,7 +189,17 @@ private fun TodayScreen(
                             Text("Dopo: countdown ${med.countdownMinutes}min", style = MaterialTheme.typography.bodySmall)
                     }
                     if (taken) {
-                        AssistChip(onClick = {}, label = { Text("Assunto") }, leadingIcon = { Icon(Icons.Default.Check, null) })
+                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            AssistChip(
+                                onClick = {},
+                                label = { Text("Assunto") },
+                                leadingIcon = { Icon(Icons.Default.Check, null) }
+                            )
+                            OutlinedButton(onClick = {
+                                markNotTaken(context, repo, med, today.toEpochDay(), time)
+                                refresh()
+                            }) { Text("Non assunto") }
+                        }
                     } else {
                         Button(onClick = {
                             markTaken(context, repo, med, today.toEpochDay(), time)
@@ -197,7 +214,15 @@ private fun TodayScreen(
 
 private fun markTaken(context: Context, repo: MedicationRepository, med: Medication, epochDay: Long, time: String) {
     val now = System.currentTimeMillis()
-    repo.recordIntake(IntakeEvent(med.id, epochDay, time, now))
+    repo.recordIntake(
+        IntakeEvent(
+            medicationId = med.id,
+            medicationName = med.name,
+            plannedEpochDay = epochDay,
+            plannedTime = time,
+            takenAtMillis = now
+        )
+    )
     NotificationManagerCompat.from(context).cancel(NotificationHelper.notificationId(med.id, time))
     if (med.countdownEnabled && med.countdownMinutes > 0) {
         val c = ActiveCountdown(
@@ -206,11 +231,21 @@ private fun markTaken(context: Context, repo: MedicationRepository, med: Medicat
             medicationName = med.name,
             note = med.countdownNote,
             startMillis = now,
-            endMillis = now + med.countdownMinutes * 60_000L
+            endMillis = now + med.countdownMinutes * 60_000L,
+            plannedEpochDay = epochDay,
+            plannedTime = time
         )
         repo.addCountdown(c)
         Scheduler.scheduleCountdown(context, c)
     }
+}
+
+private fun markNotTaken(context: Context, repo: MedicationRepository, med: Medication, epochDay: Long, time: String) {
+    repo.getCountdownsForIntake(med.id, epochDay, time).forEach { countdown ->
+        Scheduler.cancelCountdown(context, countdown)
+        repo.removeCountdown(countdown.id)
+    }
+    repo.removeIntake(med.id, epochDay, time)
 }
 
 @Composable
@@ -264,6 +299,99 @@ private fun AlarmListScreen(meds: List<Medication>, onEdit: (Medication) -> Unit
         }
         if (meds.none { it.enabled }) Text("Nessuna sveglia attiva.")
     }
+}
+
+@Composable
+private fun CalendarScreen(repo: MedicationRepository, meds: List<Medication>, revision: Int) {
+    val context = LocalContext.current
+    val intakes = remember(revision, meds) { repo.getIntakes().sortedByDescending { it.takenAtMillis } }
+    val medNames = remember(meds) { meds.associate { it.id to it.name } }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use { writer ->
+                    writer.write(buildHistoryCsv(intakes, medNames))
+                }
+            }
+        }
+    }
+
+    ScreenColumn {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Calendario", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Text("Storico delle assunzioni effettive", style = MaterialTheme.typography.bodyMedium)
+            }
+            OutlinedButton(
+                onClick = {
+                    exportLauncher.launch("MediTimer_storico_${LocalDate.now()}.csv")
+                },
+                enabled = intakes.isNotEmpty()
+            ) {
+                Icon(Icons.Default.FileDownload, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("CSV")
+            }
+        }
+
+        if (intakes.isEmpty()) {
+            Text("Nessuna assunzione registrata.")
+        } else {
+            val grouped = intakes.groupBy {
+                Instant.ofEpochMilli(it.takenAtMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+            }.toList().sortedByDescending { it.first }
+
+            grouped.forEach { (date, events) ->
+                Text(date.itDate(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                events.sortedBy { it.takenAtMillis }.forEach { event ->
+                    val taken = Instant.ofEpochMilli(event.takenAtMillis).atZone(ZoneId.systemDefault())
+                    val name = event.medicationName.ifBlank { medNames[event.medicationId] ?: "Farmaco eliminato" }
+                    Card {
+                        Row(
+                            Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                taken.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm")),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(name, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "Previsto: ${LocalDate.ofEpochDay(event.plannedEpochDay).itDate()} · ${event.plannedTime}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun buildHistoryCsv(intakes: List<IntakeEvent>, medNames: Map<Long, String>): String = buildString {
+    append('\uFEFF')
+    appendLine("Data;Ora assunzione;Farmaco;Data prevista;Ora prevista;Timestamp")
+    intakes.sortedBy { it.takenAtMillis }.forEach { event ->
+        val taken = Instant.ofEpochMilli(event.takenAtMillis).atZone(ZoneId.systemDefault())
+        val name = event.medicationName.ifBlank { medNames[event.medicationId] ?: "Farmaco eliminato" }
+        append(csvCell(taken.toLocalDate().itDate())).append(';')
+        append(csvCell(taken.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm:ss")))).append(';')
+        append(csvCell(name)).append(';')
+        append(csvCell(LocalDate.ofEpochDay(event.plannedEpochDay).itDate())).append(';')
+        append(csvCell(event.plannedTime)).append(';')
+        append(event.takenAtMillis).appendLine()
+    }
+}
+
+private fun csvCell(value: String): String {
+    val escaped = value.replace("\"", "\"\"")
+    return if (escaped.any { it == ';' || it == '\n' || it == '\r' || it == '\"' }) "\"$escaped\"" else escaped
 }
 
 @Composable
