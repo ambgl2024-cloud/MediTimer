@@ -1,0 +1,542 @@
+package com.example.meditimer.ui
+
+import android.app.DatePickerDialog
+import android.content.Context
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.app.NotificationManagerCompat
+import com.example.meditimer.data.*
+import com.example.meditimer.notifications.NotificationHelper
+import com.example.meditimer.notifications.Scheduler
+import kotlinx.coroutines.delay
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Calendar
+import kotlin.math.max
+
+private enum class AppTab(val label: String) { TODAY("Oggi"), MEDS("Farmaci"), ALARMS("Sveglie"), PACKAGES("Confezioni") }
+
+@Composable
+fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
+    val context = LocalContext.current
+    val repo = remember { MedicationRepository(context) }
+    var tab by remember { mutableStateOf(AppTab.TODAY) }
+    var revision by remember { mutableIntStateOf(0) }
+    var editing by remember { mutableStateOf<Medication?>(null) }
+    var creating by remember { mutableStateOf(false) }
+
+    fun refresh() { revision++ }
+    val meds = remember(revision) { repo.getMedications() }
+
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                AppTab.entries.forEach { item ->
+                    NavigationBarItem(
+                        selected = tab == item,
+                        onClick = { tab = item },
+                        icon = {
+                            Icon(
+                                when (item) {
+                                    AppTab.TODAY -> Icons.Default.Today
+                                    AppTab.MEDS -> Icons.Default.Medication
+                                    AppTab.ALARMS -> Icons.Default.Alarm
+                                    AppTab.PACKAGES -> Icons.Default.Inventory2
+                                },
+                                contentDescription = item.label
+                            )
+                        },
+                        label = { Text(item.label) }
+                    )
+                }
+            }
+        }
+    ) { padding ->
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            when (tab) {
+                AppTab.TODAY -> TodayScreen(meds, repo, revision, refresh, requestExactAlarmPermission)
+                AppTab.MEDS -> MedicationListScreen(
+                    meds = meds,
+                    onAdd = { creating = true },
+                    onEdit = { editing = it },
+                    onDelete = { med ->
+                        Scheduler.cancelMedication(context, med)
+                        repo.deleteMedication(med.id)
+                        refresh()
+                    }
+                )
+                AppTab.ALARMS -> AlarmListScreen(meds, onEdit = { editing = it })
+                AppTab.PACKAGES -> PackageScreen(meds, repo, refresh)
+            }
+        }
+    }
+
+    if (creating || editing != null) {
+        MedicationEditorDialog(
+            initial = editing,
+            onDismiss = { creating = false; editing = null },
+            onSave = { med ->
+                editing?.let { Scheduler.cancelMedication(context, it) }
+                repo.upsertMedication(med)
+                med.alarmTimes.forEach { Scheduler.scheduleNextForSlot(context, med, it) }
+                creating = false
+                editing = null
+                refresh()
+            }
+        )
+    }
+}
+
+@Composable
+private fun ScreenColumn(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        content = content
+    )
+}
+
+@Composable
+private fun TodayScreen(
+    meds: List<Medication>,
+    repo: MedicationRepository,
+    revision: Int,
+    refresh: () -> Unit,
+    requestExactAlarmPermission: () -> Unit
+) {
+    val context = LocalContext.current
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    val today = remember(now) { Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate() }
+    val countdowns = remember(now, revision) { repo.getActiveCountdowns(now) }
+    val doses = remember(meds, today, revision) {
+        meds.filter { it.isActiveOn(today) }
+            .flatMap { med -> med.alarmTimes.map { time -> med to time } }
+            .sortedBy { it.second }
+    }
+
+    ScreenColumn {
+        Text("Oggi", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text(today.itDate(), style = MaterialTheme.typography.bodyLarge)
+
+        if (!Scheduler.canScheduleExact(context)) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Allarmi precisi non abilitati", fontWeight = FontWeight.Bold)
+                    Text("Android può ritardare i promemoria. Abilita gli allarmi precisi per avere orari affidabili.")
+                    Button(onClick = requestExactAlarmPermission) { Text("Abilita") }
+                }
+            }
+        }
+
+        if (countdowns.isNotEmpty()) {
+            Text("Countdown attivi", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            countdowns.forEach { c ->
+                val remaining = max(0L, c.endMillis - now)
+                val min = remaining / 60_000
+                val sec = (remaining % 60_000) / 1_000
+                Card {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(c.medicationName, fontWeight = FontWeight.Bold)
+                        Text(String.format("%02d:%02d", min, sec), style = MaterialTheme.typography.headlineMedium)
+                        if (c.note.isNotBlank()) Text(c.note)
+                        Text("Fine alle ${millisToTime(c.endMillis)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        Text("Assunzioni", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        if (doses.isEmpty()) Text("Nessuna assunzione programmata per oggi.")
+        doses.forEach { (med, time) ->
+            val taken = repo.isTaken(med.id, today.toEpochDay(), time)
+            Card {
+                Row(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("$time · ${med.name}", fontWeight = FontWeight.Bold)
+                        if (med.doseNote.isNotBlank()) Text(med.doseNote)
+                        if (med.countdownEnabled && med.countdownMinutes > 0)
+                            Text("Dopo: countdown ${med.countdownMinutes}min", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (taken) {
+                        AssistChip(onClick = {}, label = { Text("Assunto") }, leadingIcon = { Icon(Icons.Default.Check, null) })
+                    } else {
+                        Button(onClick = {
+                            markTaken(context, repo, med, today.toEpochDay(), time)
+                            refresh()
+                        }) { Text("Assunto") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun markTaken(context: Context, repo: MedicationRepository, med: Medication, epochDay: Long, time: String) {
+    val now = System.currentTimeMillis()
+    repo.recordIntake(IntakeEvent(med.id, epochDay, time, now))
+    NotificationManagerCompat.from(context).cancel(NotificationHelper.notificationId(med.id, time))
+    if (med.countdownEnabled && med.countdownMinutes > 0) {
+        val c = ActiveCountdown(
+            id = now + med.id,
+            medicationId = med.id,
+            medicationName = med.name,
+            note = med.countdownNote,
+            startMillis = now,
+            endMillis = now + med.countdownMinutes * 60_000L
+        )
+        repo.addCountdown(c)
+        Scheduler.scheduleCountdown(context, c)
+    }
+}
+
+@Composable
+private fun MedicationListScreen(
+    meds: List<Medication>,
+    onAdd: () -> Unit,
+    onEdit: (Medication) -> Unit,
+    onDelete: (Medication) -> Unit
+) {
+    ScreenColumn {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Farmaci", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            FilledIconButton(onClick = onAdd) { Icon(Icons.Default.Add, "Aggiungi") }
+        }
+        if (meds.isEmpty()) Text("Aggiungi il primo farmaco per creare il piano di assunzione.")
+        meds.forEach { med ->
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(med.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            if (med.doseNote.isNotBlank()) Text(med.doseNote)
+                        }
+                        IconButton(onClick = { onEdit(med) }) { Icon(Icons.Default.Edit, "Modifica") }
+                        IconButton(onClick = { onDelete(med) }) { Icon(Icons.Default.Delete, "Elimina") }
+                    }
+                    Text(med.recurrenceLabel())
+                    Text("${med.timesPerActiveDay} assunzion${if (med.timesPerActiveDay == 1) "e" else "i"}/giorno · ${med.alarmTimes.joinToString(" · ")}")
+                    Text("Confezione: max ${med.packageMaxDays} giorni")
+                    if (med.countdownEnabled) Text("Countdown post-assunzione: ${med.countdownMinutes}min")
+                    if (!med.enabled) Text("Sospeso", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlarmListScreen(meds: List<Medication>, onEdit: (Medication) -> Unit) {
+    ScreenColumn {
+        Text("Sveglie", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("Gli orari sono collegati alla regola di ricorrenza del farmaco.")
+        meds.filter { it.enabled }.forEach { med ->
+            Card(onClick = { onEdit(med) }) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(med.name, fontWeight = FontWeight.Bold)
+                    Text(med.recurrenceLabel())
+                    med.alarmTimes.forEachIndexed { i, time -> Text("${i + 1}. $time") }
+                }
+            }
+        }
+        if (meds.none { it.enabled }) Text("Nessuna sveglia attiva.")
+    }
+}
+
+@Composable
+private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, refresh: () -> Unit) {
+    val context = LocalContext.current
+    val today = LocalDate.now()
+    ScreenColumn {
+        Text("Cambio confezione", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        meds.forEach { med ->
+            val last = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
+            val due = last?.plusDays(med.packageMaxDays.toLong())
+            val remaining = due?.toEpochDay()?.minus(today.toEpochDay())
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(med.name, fontWeight = FontWeight.Bold)
+                    Text("Durata massima: ${med.packageMaxDays} giorni")
+                    Text("Ultimo cambio: ${last?.itDate() ?: "non impostato"}")
+                    if (due != null) {
+                        Text("Prossimo cambio: ${due.itDate()}")
+                        Text(
+                            when {
+                                remaining == null -> ""
+                                remaining > 1 -> "Mancano $remaining giorni"
+                                remaining == 1L -> "Manca 1 giorno"
+                                remaining == 0L -> "Cambio previsto oggi"
+                                else -> "Scaduta da ${-remaining} giorni"
+                            },
+                            color = if ((remaining ?: 99) <= 3) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            repo.upsertMedication(med.copy(lastPackageChangeEpochDay = today.toEpochDay()))
+                            refresh()
+                        }) { Text("Cambiata oggi") }
+                        OutlinedButton(onClick = {
+                            showDatePicker(context, last ?: today) { selected ->
+                                repo.upsertMedication(med.copy(lastPackageChangeEpochDay = selected.toEpochDay()))
+                                refresh()
+                            }
+                        }) { Text("Imposta data") }
+                    }
+                }
+            }
+        }
+        if (meds.isEmpty()) Text("Nessun farmaco configurato.")
+    }
+}
+
+private fun showDatePicker(context: Context, initial: LocalDate, onSelected: (LocalDate) -> Unit) {
+    DatePickerDialog(
+        context,
+        { _, year, month, day -> onSelected(LocalDate.of(year, month + 1, day)) },
+        initial.year, initial.monthValue - 1, initial.dayOfMonth
+    ).show()
+}
+
+@Composable
+private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, onSave: (Medication) -> Unit) {
+    val context = LocalContext.current
+    var name by remember(initial) { mutableStateOf(initial?.name.orEmpty()) }
+    var doseNote by remember(initial) { mutableStateOf(initial?.doseNote.orEmpty()) }
+    var enabled by remember(initial) { mutableStateOf(initial?.enabled ?: true) }
+    var timesCount by remember(initial) { mutableIntStateOf(initial?.timesPerActiveDay ?: 1) }
+    var times by remember(initial) { mutableStateOf(initial?.alarmTimes ?: listOf("08:00")) }
+    var recurrence by remember(initial) { mutableStateOf(initial?.recurrenceType ?: RecurrenceType.DAILY) }
+    var weekdays by remember(initial) { mutableStateOf(initial?.weekdays ?: setOf(1,2,3,4,5)) }
+    var everyN by remember(initial) { mutableStateOf((initial?.everyNDays ?: 2).toString()) }
+    var anchorDate by remember(initial) { mutableStateOf(initial?.anchorEpochDay?.let(LocalDate::ofEpochDay) ?: LocalDate.now()) }
+    var monthlyDaysText by remember(initial) { mutableStateOf(initial?.monthlyDays?.sorted()?.joinToString(",") ?: "1,15") }
+    var packageDays by remember(initial) { mutableStateOf((initial?.packageMaxDays ?: 30).toString()) }
+    var countdownEnabled by remember(initial) { mutableStateOf(initial?.countdownEnabled ?: false) }
+    var countdownMinutes by remember(initial) { mutableStateOf((initial?.countdownMinutes?.takeIf { it > 0 } ?: 30).toString()) }
+    var countdownNote by remember(initial) { mutableStateOf(initial?.countdownNote.orEmpty()) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun resizeTimes(newCount: Int) {
+        timesCount = newCount.coerceIn(1, 8)
+        times = when {
+            times.size < timesCount -> times + List(timesCount - times.size) { defaultTimeForIndex(times.size + it, timesCount) }
+            times.size > timesCount -> times.take(timesCount)
+            else -> times
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.fillMaxWidth(0.96f).fillMaxHeight(0.94f),
+        title = { Text(if (initial == null) "Nuovo farmaco" else "Modifica farmaco") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(name, { name = it }, label = { Text("Nome farmaco *") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(doseNote, { doseNote = it }, label = { Text("Dose / nota") }, placeholder = { Text("es. 1 compressa") }, modifier = Modifier.fillMaxWidth())
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Attivo", modifier = Modifier.weight(1f))
+                    Switch(enabled, { enabled = it })
+                }
+
+                Text("Assunzioni nei giorni attivi", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { resizeTimes(timesCount - 1) }, enabled = timesCount > 1) { Text("−") }
+                    Text(timesCount.toString(), style = MaterialTheme.typography.titleLarge)
+                    OutlinedButton(onClick = { resizeTimes(timesCount + 1) }, enabled = timesCount < 8) { Text("+") }
+                }
+                times.take(timesCount).forEachIndexed { index, value ->
+                    OutlinedTextField(
+                        value = value,
+                        onValueChange = { new -> times = times.toMutableList().also { it[index] = new } },
+                        label = { Text("Orario ${index + 1} (HH:mm)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                Text("Ricorrenza", fontWeight = FontWeight.Bold)
+                RecurrencePicker(recurrence) { recurrence = it }
+                when (recurrence) {
+                    RecurrenceType.DAILY -> Text("Il farmaco è previsto ogni giorno.", style = MaterialTheme.typography.bodySmall)
+                    RecurrenceType.WEEKDAYS -> WeekdayPicker(weekdays) { weekdays = it }
+                    RecurrenceType.EVERY_N_DAYS -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            everyN, { everyN = it.filter(Char::isDigit) },
+                            label = { Text("Ogni quanti giorni") }, modifier = Modifier.fillMaxWidth(), singleLine = true
+                        )
+                        OutlinedButton(onClick = {
+                            showDatePicker(context, anchorDate) { anchorDate = it }
+                        }) { Text("Data di partenza: ${anchorDate.itDate()}") }
+                    }
+                    RecurrenceType.MONTHLY_DAYS -> OutlinedTextField(
+                        monthlyDaysText, { monthlyDaysText = it },
+                        label = { Text("Giorni del mese") },
+                        placeholder = { Text("es. 1, 10, 20") },
+                        supportingText = { Text("Inserisci i giorni separati da virgola (1–31).") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Divider()
+                OutlinedTextField(
+                    packageDays, { packageDays = it.filter(Char::isDigit) },
+                    label = { Text("Durata massima confezione dopo apertura (giorni)") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                )
+
+                Divider()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Countdown dopo assunzione", fontWeight = FontWeight.Bold)
+                        Text("Parte quando premi “Assunto”.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(countdownEnabled, { countdownEnabled = it })
+                }
+                if (countdownEnabled) {
+                    OutlinedTextField(
+                        countdownMinutes, { countdownMinutes = it.filter(Char::isDigit) },
+                        label = { Text("Durata countdown (minuti)") }, modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                    OutlinedTextField(
+                        countdownNote, { countdownNote = it },
+                        label = { Text("Nota al countdown") },
+                        placeholder = { Text("es. Attendere prima di fare colazione") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val parsedTimes = times.take(timesCount).map { it.trim() }
+                val n = everyN.toIntOrNull() ?: 0
+                val p = packageDays.toIntOrNull() ?: 0
+                val c = countdownMinutes.toIntOrNull() ?: 0
+                val monthly = parseMonthlyDays(monthlyDaysText)
+                error = when {
+                    name.isBlank() -> "Inserisci il nome del farmaco."
+                    parsedTimes.any { runCatching { LocalTime.parse(it, DateTimeFormatter.ofPattern("HH:mm")) }.isFailure } -> "Controlla gli orari: usa il formato HH:mm, ad es. 08:30."
+                    parsedTimes.distinct().size != parsedTimes.size -> "Gli orari delle assunzioni devono essere diversi."
+                    recurrence == RecurrenceType.WEEKDAYS && weekdays.isEmpty() -> "Seleziona almeno un giorno della settimana."
+                    recurrence == RecurrenceType.EVERY_N_DAYS && n < 1 -> "La ricorrenza deve essere almeno ogni 1 giorno."
+                    recurrence == RecurrenceType.MONTHLY_DAYS && monthly.isEmpty() -> "Inserisci almeno un giorno del mese valido (1–31)."
+                    p < 1 -> "La durata della confezione deve essere almeno 1 giorno."
+                    countdownEnabled && c < 1 -> "Il countdown deve durare almeno 1 minuto."
+                    else -> null
+                }
+                if (error == null) {
+                    onSave(
+                        Medication(
+                            id = initial?.id ?: System.currentTimeMillis(),
+                            name = name.trim(),
+                            doseNote = doseNote.trim(),
+                            timesPerActiveDay = timesCount,
+                            recurrenceType = recurrence,
+                            weekdays = weekdays,
+                            everyNDays = n.coerceAtLeast(1),
+                            anchorEpochDay = anchorDate.toEpochDay(),
+                            monthlyDays = monthly,
+                            alarmTimes = parsedTimes.sorted(),
+                            packageMaxDays = p,
+                            lastPackageChangeEpochDay = initial?.lastPackageChangeEpochDay,
+                            countdownEnabled = countdownEnabled,
+                            countdownMinutes = if (countdownEnabled) c else 0,
+                            countdownNote = if (countdownEnabled) countdownNote.trim() else "",
+                            enabled = enabled
+                        )
+                    )
+                }
+            }) { Text("Salva") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annulla") } }
+    )
+}
+
+@Composable
+private fun RecurrencePicker(selected: RecurrenceType, onSelected: (RecurrenceType) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                when (selected) {
+                    RecurrenceType.DAILY -> "Ogni giorno"
+                    RecurrenceType.WEEKDAYS -> "Giorni della settimana"
+                    RecurrenceType.EVERY_N_DAYS -> "Ogni N giorni"
+                    RecurrenceType.MONTHLY_DAYS -> "Giorni del mese"
+                },
+                modifier = Modifier.weight(1f)
+            )
+            Icon(Icons.Default.ArrowDropDown, null)
+        }
+        DropdownMenu(expanded, { expanded = false }) {
+            listOf(
+                RecurrenceType.DAILY to "Ogni giorno",
+                RecurrenceType.WEEKDAYS to "Giorni della settimana",
+                RecurrenceType.EVERY_N_DAYS to "Ogni N giorni",
+                RecurrenceType.MONTHLY_DAYS to "Giorni del mese"
+            ).forEach { (type, label) ->
+                DropdownMenuItem(text = { Text(label) }, onClick = { onSelected(type); expanded = false })
+            }
+        }
+    }
+}
+
+@Composable
+private fun WeekdayPicker(selected: Set<Int>, onChange: (Set<Int>) -> Unit) {
+    val days = listOf(1 to "L", 2 to "M", 3 to "M", 4 to "G", 5 to "V", 6 to "S", 7 to "D")
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        days.forEach { (value, label) ->
+            FilterChip(
+                modifier = Modifier.weight(1f),
+                selected = selected.contains(value),
+                onClick = { onChange(if (selected.contains(value)) selected - value else selected + value) },
+                label = { Text(label) }
+            )
+        }
+    }
+}
+
+private fun parseMonthlyDays(text: String): Set<Int> = text.split(",", ";", " ")
+    .mapNotNull { it.trim().toIntOrNull() }
+    .filter { it in 1..31 }
+    .toSet()
+
+private fun defaultTimeForIndex(index: Int, total: Int): String {
+    val defaults = listOf("08:00", "13:00", "20:00", "23:00", "06:00", "10:00", "16:00", "18:00")
+    return defaults.getOrElse(index) { "08:00" }
+}
+
+private fun millisToTime(millis: Long): String = Instant.ofEpochMilli(millis)
+    .atZone(ZoneId.systemDefault())
+    .toLocalTime()
+    .format(DateTimeFormatter.ofPattern("HH:mm"))
