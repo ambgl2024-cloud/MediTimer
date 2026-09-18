@@ -11,8 +11,29 @@ android {
         applicationId = "com.example.meditimer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
+    }
+
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("MEDITIMER_KEYSTORE_PATH")
+            val storePasswordValue = System.getenv("MEDITIMER_STORE_PASSWORD")
+            val keyAliasValue = System.getenv("MEDITIMER_KEY_ALIAS")
+            val keyPasswordValue = System.getenv("MEDITIMER_KEY_PASSWORD")
+
+            if (!keystorePath.isNullOrBlank()) storeFile = file(keystorePath)
+            storePassword = storePasswordValue
+            keyAlias = keyAliasValue
+            keyPassword = keyPasswordValue
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     buildFeatures { compose = true }

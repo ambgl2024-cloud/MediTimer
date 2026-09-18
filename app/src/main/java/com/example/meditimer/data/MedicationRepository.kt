@@ -38,6 +38,22 @@ class MedicationRepository(context: Context) {
         saveArray("intakes", trimmed.map { it.toJson() })
     }
 
+
+    fun updateIntake(event: IntakeEvent) {
+        val list = getIntakes().toMutableList()
+        val idx = list.indexOfFirst { it.id == event.id }
+        if (idx >= 0) {
+            list[idx] = event
+        } else {
+            list.add(event)
+        }
+        saveArray("intakes", list.sortedByDescending { it.takenAtMillis }.take(5000).map { it.toJson() })
+    }
+
+    fun deleteIntake(id: Long) {
+        saveArray("intakes", getIntakes().filterNot { it.id == id }.map { it.toJson() })
+    }
+
     fun removeIntake(medicationId: Long, epochDay: Long, plannedTime: String) {
         saveArray(
             "intakes",

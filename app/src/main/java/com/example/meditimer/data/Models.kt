@@ -81,6 +81,7 @@ data class Medication(
 }
 
 data class IntakeEvent(
+    val id: Long = System.currentTimeMillis(),
     val medicationId: Long,
     val medicationName: String = "",
     val plannedEpochDay: Long,
@@ -90,6 +91,7 @@ data class IntakeEvent(
     val key: String get() = "$medicationId|$plannedEpochDay|$plannedTime"
 
     fun toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
         put("medicationId", medicationId)
         put("medicationName", medicationName)
         put("plannedEpochDay", plannedEpochDay)
@@ -98,13 +100,17 @@ data class IntakeEvent(
     }
 
     companion object {
-        fun fromJson(o: JSONObject) = IntakeEvent(
-            medicationId = o.getLong("medicationId"),
-            medicationName = o.optString("medicationName"),
-            plannedEpochDay = o.getLong("plannedEpochDay"),
-            plannedTime = o.getString("plannedTime"),
-            takenAtMillis = o.getLong("takenAtMillis")
-        )
+        fun fromJson(o: JSONObject): IntakeEvent {
+            val takenAt = o.getLong("takenAtMillis")
+            return IntakeEvent(
+                id = o.optLong("id", takenAt),
+                medicationId = o.getLong("medicationId"),
+                medicationName = o.optString("medicationName"),
+                plannedEpochDay = o.getLong("plannedEpochDay"),
+                plannedTime = o.getString("plannedTime"),
+                takenAtMillis = takenAt
+            )
+        }
     }
 }
 

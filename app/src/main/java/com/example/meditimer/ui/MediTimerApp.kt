@@ -87,7 +87,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
                 )
                 AppTab.ALARMS -> AlarmListScreen(meds, onEdit = { editing = it })
                 AppTab.PACKAGES -> PackageScreen(meds, repo, ::refresh)
-                AppTab.CALENDAR -> CalendarScreen(repo, meds, revision)
+                AppTab.CALENDAR -> CalendarScreen(repo, meds, revision, ::refresh)
             }
         }
     }
@@ -302,10 +302,17 @@ private fun AlarmListScreen(meds: List<Medication>, onEdit: (Medication) -> Unit
 }
 
 @Composable
-private fun CalendarScreen(repo: MedicationRepository, meds: List<Medication>, revision: Int) {
+private fun CalendarScreen(
+    repo: MedicationRepository,
+    meds: List<Medication>,
+    revision: Int,
+    refresh: () -> Unit
+) {
     val context = LocalContext.current
     val intakes = remember(revision, meds) { repo.getIntakes().sortedByDescending { it.takenAtMillis } }
     val medNames = remember(meds) { meds.associate { it.id to it.name } }
+    var editingEvent by remember { mutableStateOf<IntakeEvent?>(null) }
+
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
     ) { uri ->
@@ -325,9 +332,7 @@ private fun CalendarScreen(repo: MedicationRepository, meds: List<Medication>, r
                 Text("Storico delle assunzioni effettive", style = MaterialTheme.typography.bodyMedium)
             }
             OutlinedButton(
-                onClick = {
-                    exportLauncher.launch("MediTimer_storico_${LocalDate.now()}.csv")
-                },
+                onClick = { exportLauncher.launch("MediTimer_storico_${LocalDate.now()}.csv") },
                 enabled = intakes.isNotEmpty()
             ) {
                 Icon(Icons.Default.FileDownload, contentDescription = null)
@@ -335,6 +340,8 @@ private fun CalendarScreen(repo: MedicationRepository, meds: List<Medication>, r
                 Text("CSV")
             }
         }
+
+        Text("Tocca un evento per modificarlo o cancellarlo.", style = MaterialTheme.typography.bodySmall)
 
         if (intakes.isEmpty()) {
             Text("Nessuna assunzione registrata.")
@@ -348,7 +355,7 @@ private fun CalendarScreen(repo: MedicationRepository, meds: List<Medication>, r
                 events.sortedBy { it.takenAtMillis }.forEach { event ->
                     val taken = Instant.ofEpochMilli(event.takenAtMillis).atZone(ZoneId.systemDefault())
                     val name = event.medicationName.ifBlank { medNames[event.medicationId] ?: "Farmaco eliminato" }
-                    Card {
+                    Card(onClick = { editingEvent = event }) {
                         Row(
                             Modifier.fillMaxWidth().padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -366,12 +373,149 @@ private fun CalendarScreen(repo: MedicationRepository, meds: List<Medication>, r
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
+                            Icon(Icons.Default.Edit, contentDescription = "Modifica evento")
                         }
                     }
                 }
             }
         }
     }
+
+    editingEvent?.let { event ->
+        HistoryEventDialog(
+            event = event,
+            currentMedicationName = event.medicationName.ifBlank { medNames[event.medicationId].orEmpty() },
+            onDismiss = { editingEvent = null },
+            onSave = { updated ->
+                repo.getCountdownsForIntake(event.medicationId, event.plannedEpochDay, event.plannedTime).forEach { countdown ->
+                    Scheduler.cancelCountdown(context, countdown)
+                    repo.removeCountdown(countdown.id)
+                }
+                repo.updateIntake(updated)
+                editingEvent = null
+                refresh()
+            },
+            onDelete = {
+                repo.getCountdownsForIntake(event.medicationId, event.plannedEpochDay, event.plannedTime).forEach { countdown ->
+                    Scheduler.cancelCountdown(context, countdown)
+                    repo.removeCountdown(countdown.id)
+                }
+                repo.deleteIntake(event.id)
+                editingEvent = null
+                refresh()
+            }
+        )
+    }
+}
+
+@Composable
+private fun HistoryEventDialog(
+    event: IntakeEvent,
+    currentMedicationName: String,
+    onDismiss: () -> Unit,
+    onSave: (IntakeEvent) -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    val zone = ZoneId.systemDefault()
+    val actual = remember(event.id, event.takenAtMillis) { Instant.ofEpochMilli(event.takenAtMillis).atZone(zone) }
+    var medicationName by remember(event.id) { mutableStateOf(event.medicationName.ifBlank { currentMedicationName }) }
+    var actualDate by remember(event.id) { mutableStateOf(actual.toLocalDate()) }
+    var actualTimeText by remember(event.id) {
+        mutableStateOf(actual.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm")))
+    }
+    var plannedDate by remember(event.id) { mutableStateOf(LocalDate.ofEpochDay(event.plannedEpochDay)) }
+    var plannedTimeText by remember(event.id) { mutableStateOf(event.plannedTime) }
+    var confirmDelete by remember(event.id) { mutableStateOf(false) }
+    var error by remember(event.id) { mutableStateOf<String?>(null) }
+    val timeFormat = remember { DateTimeFormatter.ofPattern("HH:mm") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Modifica assunzione") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = medicationName,
+                    onValueChange = { medicationName = it },
+                    label = { Text("Farmaco") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Text("Assunzione effettiva", fontWeight = FontWeight.Bold)
+                OutlinedButton(onClick = {
+                    showDatePicker(context, actualDate) { actualDate = it }
+                }) { Text("Data: ${actualDate.itDate()}") }
+                OutlinedTextField(
+                    value = actualTimeText,
+                    onValueChange = { actualTimeText = it },
+                    label = { Text("Ora effettiva (HH:mm)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                Divider()
+                Text("Programmazione originale", fontWeight = FontWeight.Bold)
+                OutlinedButton(onClick = {
+                    showDatePicker(context, plannedDate) { plannedDate = it }
+                }) { Text("Data prevista: ${plannedDate.itDate()}") }
+                OutlinedTextField(
+                    value = plannedTimeText,
+                    onValueChange = { plannedTimeText = it },
+                    label = { Text("Ora prevista (HH:mm)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+                if (confirmDelete) {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Eliminare definitivamente questo evento dallo storico?", fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = onDelete) { Text("Sì, elimina") }
+                                TextButton(onClick = { confirmDelete = false }) { Text("Annulla") }
+                            }
+                        }
+                    }
+                } else {
+                    OutlinedButton(onClick = { confirmDelete = true }) {
+                        Icon(Icons.Default.Delete, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Elimina evento")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val actualTime = runCatching { LocalTime.parse(actualTimeText.trim(), timeFormat) }.getOrNull()
+                val plannedTime = runCatching { LocalTime.parse(plannedTimeText.trim(), timeFormat) }.getOrNull()
+                error = when {
+                    medicationName.isBlank() -> "Inserisci il nome del farmaco."
+                    actualTime == null -> "Controlla l'ora effettiva: usa HH:mm."
+                    plannedTime == null -> "Controlla l'ora prevista: usa HH:mm."
+                    else -> null
+                }
+                if (error == null && actualTime != null && plannedTime != null) {
+                    val millis = actualDate.atTime(actualTime).atZone(zone).toInstant().toEpochMilli()
+                    onSave(
+                        event.copy(
+                            medicationName = medicationName.trim(),
+                            plannedEpochDay = plannedDate.toEpochDay(),
+                            plannedTime = plannedTime.format(timeFormat),
+                            takenAtMillis = millis
+                        )
+                    )
+                }
+            }) { Text("Salva") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Chiudi") } }
+    )
 }
 
 private fun buildHistoryCsv(intakes: List<IntakeEvent>, medNames: Map<Long, String>): String = buildString {

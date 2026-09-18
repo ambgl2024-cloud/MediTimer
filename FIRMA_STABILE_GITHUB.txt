@@ -1,0 +1,22 @@
+MEDI TIMER - FIRMA STABILE GITHUB ACTIONS
+=========================================
+
+Questa versione NON usa piu' la firma debug casuale del runner GitHub.
+La build release viene firmata sempre con la stessa chiave tramite GitHub Actions Secrets.
+
+PRIMA DELLA BUILD:
+1. Scarica e conserva separatamente il pacchetto privato MediTimer_FIRMA_STABILE_PRIVATA.zip.
+2. NON caricare mai quel pacchetto, il file .jks o le credenziali nel repository pubblico.
+3. Nel repository GitHub vai in:
+   Settings > Secrets and variables > Actions > New repository secret
+4. Crea i quattro secrets indicati nel file SIGNING_CREDENTIALS.txt del pacchetto privato:
+   - MEDITIMER_KEYSTORE_BASE64
+   - MEDITIMER_STORE_PASSWORD
+   - MEDITIMER_KEY_ALIAS
+   - MEDITIMER_KEY_PASSWORD
+5. Carica/aggiorna i file del progetto e fai commit.
+6. Il workflow genera app-release.apk firmato stabilmente.
+
+NOTA SULLA PRIMA INSTALLAZIONE:
+Se sul telefono e' installata una vecchia build debug con firma differente, Android puo' richiedere una disinstallazione una tantum prima di installare la prima build release firmata stabilmente.
+Dopo quella prima installazione, le versioni future firmate con la stessa chiave saranno aggiornabili sopra la precedente senza perdere i dati.

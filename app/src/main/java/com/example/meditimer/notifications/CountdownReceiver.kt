@@ -14,13 +14,13 @@ class CountdownReceiver : BroadcastReceiver() {
         when (intent.action) {
             ACTION_TICK -> {
                 if (System.currentTimeMillis() < countdown.endMillis) {
-                    SoundHelper.playMinuteTick()
+                    SoundHelper.playMinuteTick(context)
                     Scheduler.scheduleCountdown(context, countdown, System.currentTimeMillis())
                 }
             }
             ACTION_FINISH -> {
                 repo.removeCountdown(id)
-                SoundHelper.playCountdownFinished()
+                SoundHelper.playCountdownFinished(context)
                 NotificationHelper.showCountdownFinished(context, countdown.medicationName, countdown.note, id)
             }
         }

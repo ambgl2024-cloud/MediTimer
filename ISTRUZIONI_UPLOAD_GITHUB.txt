@@ -1,24 +1,14 @@
-MEDITIMER v0.2.0 - AGGIORNAMENTO
+MEDI TIMER v0.3.0 - AGGIORNAMENTO GITHUB
+========================================
 
-1. Estrai completamente questo ZIP sul PC.
-2. Apri il repository GitHub MediTimer.
-3. Add file -> Upload files.
-4. Carica/sovrascrivi il contenuto del pacchetto.
-5. Verifica che resti presente anche:
-   .github/workflows/build-apk.yml
-6. Premi Commit changes.
-7. Vai in Actions -> Build MediTimer APK.
-8. Attendi il segno verde.
-9. Apri il run completato e scarica l'artifact MediTimer-APK.
-10. Estrai app-debug.apk e installalo sul telefono.
+1. PRIMA configura la firma stabile seguendo FIRMA_STABILE_GITHUB.txt e usando il pacchetto privato separato MediTimer_FIRMA_STABILE_PRIVATA.zip.
+2. Estrai MediTimer_GitHub_v0.3.0.zip sul PC.
+3. Nel repository GitHub apri Code > Add file > Upload files.
+4. Carica il contenuto estratto sovrascrivendo i file esistenti.
+5. NON caricare il pacchetto privato della firma e NON caricare file .jks.
+6. Commit changes su main.
+7. Apri Actions > Build MediTimer APK.
+8. Se il workflow è verde, scarica l'artifact MediTimer-APK.
+9. Dentro troverai app-release.apk.
 
-L'aggiornamento usa lo stesso applicationId, quindi Android dovrebbe proporre l'aggiornamento dell'app esistente mantenendo i dati locali.
-
-Novita' v0.2.0:
-- pulsante Non assunto per annullare un Assunto errato;
-- annullamento del countdown collegato;
-- beep ogni minuto del countdown;
-- suono differente a 0;
-- nuova scheda Calendario;
-- storico persistente anche dopo eliminazione del farmaco;
-- export CSV.
+La prima installazione con firma stabile può richiedere la disinstallazione della precedente build debug. Dopo questa prima volta, conserva la stessa chiave e gli aggiornamenti successivi saranno installabili sopra l'app esistente.
