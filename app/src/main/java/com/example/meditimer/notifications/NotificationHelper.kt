@@ -1,5 +1,6 @@
 package com.example.meditimer.notifications
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -11,11 +12,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.example.meditimer.MainActivity
 import com.example.meditimer.R
+import com.example.meditimer.data.ActiveCountdown
 import com.example.meditimer.data.Medication
+import kotlin.math.max
 
 object NotificationHelper {
     const val CHANNEL_MED = "medication_alarm_v1"
     const val CHANNEL_COUNTDOWN = "countdown_alarm_v2"
+    const val CHANNEL_COUNTDOWN_ACTIVE = "countdown_active_v1"
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -37,6 +41,45 @@ object NotificationHelper {
                 enableVibration(true)
             }
         )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_COUNTDOWN_ACTIVE, "Countdown attivo", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Mantiene attivo il countdown anche a schermo spento"
+                setSound(null, null)
+                enableVibration(false)
+            }
+        )
+    }
+
+    fun buildCountdownActiveNotification(context: Context, countdowns: List<ActiveCountdown>): Notification {
+        ensureChannels(context)
+        val openIntent = PendingIntent.getActivity(
+            context,
+            8701,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val now = System.currentTimeMillis()
+        val next = countdowns.filter { it.endMillis > now }.minByOrNull { it.endMillis }
+        val body = when {
+            next == null -> "Countdown in aggiornamento"
+            countdowns.size == 1 -> {
+                val remainingMin = max(1L, (next.endMillis - now + 59_999L) / 60_000L)
+                "${next.medicationName} · circa ${remainingMin}min rimanenti"
+            }
+            else -> "${countdowns.size} countdown attivi"
+        }
+
+        return NotificationCompat.Builder(context, CHANNEL_COUNTDOWN_ACTIVE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("MediTimer · countdown attivo")
+            .setContentText(body)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(openIntent)
+            .build()
     }
 
     fun showMedicationAlarm(

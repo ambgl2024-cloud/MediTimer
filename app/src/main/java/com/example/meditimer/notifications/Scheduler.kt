@@ -59,49 +59,58 @@ object Scheduler {
         }
     }
 
-    fun scheduleCountdown(context: Context, countdown: ActiveCountdown, afterMillis: Long = System.currentTimeMillis()) {
-        if (countdown.endMillis <= afterMillis) {
-            scheduleCountdownEvent(context, countdown, countdown.endMillis, CountdownReceiver.ACTION_FINISH)
-            return
-        }
-
-        val elapsed = ((afterMillis - countdown.startMillis).coerceAtLeast(0L) / 60_000L)
-        val nextMinuteMark = countdown.startMillis + (elapsed + 1L) * 60_000L
-        if (nextMinuteMark < countdown.endMillis) {
-            scheduleCountdownEvent(context, countdown, nextMinuteMark, CountdownReceiver.ACTION_TICK)
-        } else {
-            scheduleCountdownEvent(context, countdown, countdown.endMillis, CountdownReceiver.ACTION_FINISH)
-        }
+    /**
+     * Starts the foreground countdown engine for reliable minute sounds with screen off.
+     * A single exact alarm is also kept for the finish time as a fallback.
+     */
+    fun scheduleCountdown(context: Context, countdown: ActiveCountdown) {
+        scheduleCountdownFinishFallback(context, countdown)
+        CountdownService.start(context)
     }
 
     fun cancelCountdown(context: Context, countdown: ActiveCountdown) {
-        val am = context.getSystemService(AlarmManager::class.java)
-        listOf(CountdownReceiver.ACTION_TICK, CountdownReceiver.ACTION_FINISH).forEach { action ->
-            countdownPendingIntent(context, countdown.id, action, PendingIntent.FLAG_NO_CREATE)?.let { pi ->
-                am.cancel(pi)
-                pi.cancel()
+        cancelCountdownFinishFallback(context, countdown.id)
+        CountdownService.start(context) // refresh/stop itself if no countdowns remain
+    }
+
+    fun restoreCountdowns(context: Context) {
+        val repo = MedicationRepository(context)
+        repo.getCountdowns().forEach { countdown ->
+            if (countdown.endMillis > System.currentTimeMillis()) {
+                scheduleCountdownFinishFallback(context, countdown)
             }
         }
-    }
-
-    private fun scheduleCountdownEvent(context: Context, countdown: ActiveCountdown, trigger: Long, action: String) {
-        val am = context.getSystemService(AlarmManager::class.java)
-        val pi = countdownPendingIntent(context, countdown.id, action, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
-        if (canScheduleExact(context)) {
-            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
-        } else {
-            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
+        if (repo.getCountdowns().any { it.endMillis > System.currentTimeMillis() }) {
+            CountdownService.start(context)
         }
     }
 
-    private fun countdownPendingIntent(context: Context, countdownId: Long, action: String, baseFlag: Int): PendingIntent? {
+    private fun scheduleCountdownFinishFallback(context: Context, countdown: ActiveCountdown) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        val pi = countdownFinishPendingIntent(context, countdown.id, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
+        if (canScheduleExact(context)) {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, countdown.endMillis, pi)
+        } else {
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, countdown.endMillis, pi)
+        }
+    }
+
+    fun cancelCountdownFinishFallback(context: Context, countdownId: Long) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        countdownFinishPendingIntent(context, countdownId, PendingIntent.FLAG_NO_CREATE)?.let { pi ->
+            am.cancel(pi)
+            pi.cancel()
+        }
+    }
+
+    private fun countdownFinishPendingIntent(context: Context, countdownId: Long, baseFlag: Int): PendingIntent? {
         val intent = Intent(context, CountdownReceiver::class.java).apply {
-            this.action = action
+            action = CountdownReceiver.ACTION_FINISH
             putExtra(CountdownReceiver.EXTRA_COUNTDOWN_ID, countdownId)
         }
         return PendingIntent.getBroadcast(
             context,
-            ("countdown:$countdownId:$action").hashCode(),
+            ("countdown-finish:$countdownId").hashCode(),
             intent,
             baseFlag or PendingIntent.FLAG_IMMUTABLE
         )

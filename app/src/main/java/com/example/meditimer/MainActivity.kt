@@ -23,12 +23,14 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         NotificationHelper.ensureChannels(this)
         Scheduler.scheduleAll(this)
+        Scheduler.restoreCountdowns(this)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         NotificationHelper.ensureChannels(this)
         Scheduler.scheduleAll(this)
+        Scheduler.restoreCountdowns(this)
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
 
         setContent {

@@ -68,6 +68,8 @@ class MedicationRepository(context: Context) {
 
     private fun getCountdownsRaw(): List<ActiveCountdown> = parseArray("countdowns") { ActiveCountdown.fromJson(it) }
 
+    fun getCountdowns(): List<ActiveCountdown> = getCountdownsRaw().sortedBy { it.endMillis }
+
     fun getActiveCountdowns(now: Long = System.currentTimeMillis()): List<ActiveCountdown> =
         getCountdownsRaw().filter { it.endMillis > now }.sortedBy { it.endMillis }
 
@@ -86,6 +88,33 @@ class MedicationRepository(context: Context) {
 
     fun removeCountdown(id: Long) {
         saveArray("countdowns", getCountdownsRaw().filterNot { it.id == id }.map { it.toJson() })
+    }
+
+    fun mergeImportedIntakes(events: List<IntakeEvent>): Int {
+        val existing = getIntakes().toMutableList()
+        val fingerprints = existing.mapTo(mutableSetOf()) { it.historyFingerprint() }
+        var added = 0
+        events.forEach { event ->
+            if (fingerprints.add(event.historyFingerprint())) {
+                existing.add(event)
+                added++
+            }
+        }
+        saveArray("intakes", existing.sortedByDescending { it.takenAtMillis }.take(5000).map { it.toJson() })
+        return added
+    }
+
+    fun replaceImportedIntakes(events: List<IntakeEvent>) {
+        val unique = LinkedHashMap<String, IntakeEvent>()
+        events.sortedBy { it.takenAtMillis }.forEach { unique[it.historyFingerprint()] = it }
+        saveArray("intakes", unique.values.sortedByDescending { it.takenAtMillis }.take(5000).map { it.toJson() })
+    }
+
+    private fun IntakeEvent.historyFingerprint(): String = buildString {
+        append(medicationName.trim().lowercase())
+        append('|').append(takenAtMillis)
+        append('|').append(plannedEpochDay)
+        append('|').append(plannedTime.trim())
     }
 
     private fun <T> parseArray(key: String, mapper: (org.json.JSONObject) -> T): List<T> {

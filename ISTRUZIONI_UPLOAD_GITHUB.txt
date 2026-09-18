@@ -1,14 +1,18 @@
-MEDI TIMER v0.3.0 - AGGIORNAMENTO GITHUB
-========================================
+MEDITIMER v0.4.0 - AGGIORNAMENTO
 
-1. PRIMA configura la firma stabile seguendo FIRMA_STABILE_GITHUB.txt e usando il pacchetto privato separato MediTimer_FIRMA_STABILE_PRIVATA.zip.
-2. Estrai MediTimer_GitHub_v0.3.0.zip sul PC.
-3. Nel repository GitHub apri Code > Add file > Upload files.
-4. Carica il contenuto estratto sovrascrivendo i file esistenti.
-5. NON caricare il pacchetto privato della firma e NON caricare file .jks.
-6. Commit changes su main.
-7. Apri Actions > Build MediTimer APK.
-8. Se il workflow è verde, scarica l'artifact MediTimer-APK.
-9. Dentro troverai app-release.apk.
+1. NON modificare i 4 GitHub Actions Secrets già configurati per la firma stabile.
+2. Estrai questo ZIP sul PC.
+3. Nel repository GitHub MediTimer carica/sovrascrivi il contenuto del pacchetto.
+4. Fai Commit changes su main.
+5. Vai in Actions e attendi Build MediTimer APK.
+6. Se la build è verde, scarica l'artifact MediTimer-APK.
+7. Estrai app-release.apk e installalo sopra la versione firmata stabile precedente.
 
-La prima installazione con firma stabile può richiedere la disinstallazione della precedente build debug. Dopo questa prima volta, conserva la stessa chiave e gli aggiornamenti successivi saranno installabili sopra l'app esistente.
+NOVITA PRINCIPALI:
+- bip ogni minuto affidabile anche con schermo spento tramite foreground service + wake lock;
+- suono finale invariato;
+- import CSV del Calendario;
+- modalità Aggiungi e Sostituisci storico;
+- controllo duplicati e righe non valide;
+- modifica/cancellazione eventi storico mantenuta;
+- firma stabile invariata.

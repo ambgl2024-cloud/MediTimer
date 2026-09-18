@@ -301,6 +301,17 @@ private fun AlarmListScreen(meds: List<Medication>, onEdit: (Medication) -> Unit
     }
 }
 
+private data class HistoryImportPreview(
+    val events: List<IntakeEvent>,
+    val totalRows: Int,
+    val invalidRows: Int,
+    val duplicateRowsInFile: Int,
+    val alreadyPresentRows: Int
+) {
+    val validRows: Int get() = events.size
+    val newRows: Int get() = (events.size - alreadyPresentRows).coerceAtLeast(0)
+}
+
 @Composable
 private fun CalendarScreen(
     repo: MedicationRepository,
@@ -312,6 +323,9 @@ private fun CalendarScreen(
     val intakes = remember(revision, meds) { repo.getIntakes().sortedByDescending { it.takenAtMillis } }
     val medNames = remember(meds) { meds.associate { it.id to it.name } }
     var editingEvent by remember { mutableStateOf<IntakeEvent?>(null) }
+    var pendingImport by remember { mutableStateOf<HistoryImportPreview?>(null) }
+    var confirmReplace by remember { mutableStateOf(false) }
+    var importMessage by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
@@ -325,19 +339,62 @@ private fun CalendarScreen(
         }
     }
 
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val result = runCatching {
+                val csv = context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+                    ?: error("File non leggibile")
+                parseHistoryCsv(csv, meds, intakes)
+            }
+            pendingImport = result.getOrNull()
+            importMessage = result.exceptionOrNull()?.let { "Import non riuscito: ${it.message ?: "CSV non valido"}" }
+        }
+    }
+
     ScreenColumn {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Calendario", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text("Storico delle assunzioni effettive", style = MaterialTheme.typography.bodyMedium)
             }
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = { importLauncher.launch(arrayOf("text/csv", "text/*", "application/csv", "application/vnd.ms-excel", "application/octet-stream")) },
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.UploadFile, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Importa CSV")
+            }
             OutlinedButton(
                 onClick = { exportLauncher.launch("MediTimer_storico_${LocalDate.now()}.csv") },
-                enabled = intakes.isNotEmpty()
+                enabled = intakes.isNotEmpty(),
+                modifier = Modifier.weight(1f)
             ) {
                 Icon(Icons.Default.FileDownload, contentDescription = null)
                 Spacer(Modifier.width(6.dp))
-                Text("CSV")
+                Text("Esporta CSV")
+            }
+        }
+
+        importMessage?.let {
+            Card {
+                Row(
+                    Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(it, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    IconButton(onClick = { importMessage = null }) { Icon(Icons.Default.Close, "Chiudi") }
+                }
             }
         }
 
@@ -379,6 +436,67 @@ private fun CalendarScreen(
                 }
             }
         }
+    }
+
+    pendingImport?.let { preview ->
+        AlertDialog(
+            onDismissRequest = { pendingImport = null },
+            title = { Text("Importa storico CSV") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Righe lette: ${preview.totalRows}")
+                    Text("Eventi validi nel file: ${preview.validRows}")
+                    Text("Nuovi rispetto allo storico: ${preview.newRows}")
+                    Text("Già presenti: ${preview.alreadyPresentRows}")
+                    if (preview.duplicateRowsInFile > 0) Text("Duplicati interni al file: ${preview.duplicateRowsInFile}")
+                    if (preview.invalidRows > 0) Text("Righe non valide ignorate: ${preview.invalidRows}")
+                    Divider()
+                    Text(
+                        "Aggiungi mantiene lo storico attuale e inserisce solo gli eventi mancanti. Sostituisci elimina lo storico attuale e usa il contenuto del CSV.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = preview.events.isNotEmpty(),
+                    onClick = {
+                        val added = repo.mergeImportedIntakes(preview.events)
+                        pendingImport = null
+                        importMessage = "Import completato: $added nuovi eventi aggiunti."
+                        refresh()
+                    }
+                ) { Text("Aggiungi") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        enabled = preview.events.isNotEmpty(),
+                        onClick = { confirmReplace = true }
+                    ) { Text("Sostituisci") }
+                    TextButton(onClick = { pendingImport = null }) { Text("Annulla") }
+                }
+            }
+        )
+    }
+
+    if (confirmReplace && pendingImport != null) {
+        AlertDialog(
+            onDismissRequest = { confirmReplace = false },
+            title = { Text("Sostituire tutto lo storico?") },
+            text = { Text("Lo storico presente sul telefono verrà cancellato e sostituito con gli eventi validi del CSV. Questa operazione non modifica Farmaci o Sveglie.") },
+            confirmButton = {
+                Button(onClick = {
+                    val events = pendingImport?.events.orEmpty()
+                    repo.replaceImportedIntakes(events)
+                    confirmReplace = false
+                    pendingImport = null
+                    importMessage = "Storico sostituito: ${events.size} eventi caricati dal CSV."
+                    refresh()
+                }) { Text("Sì, sostituisci") }
+            },
+            dismissButton = { TextButton(onClick = { confirmReplace = false }) { Text("Annulla") } }
+        )
     }
 
     editingEvent?.let { event ->
@@ -520,7 +638,7 @@ private fun HistoryEventDialog(
 
 private fun buildHistoryCsv(intakes: List<IntakeEvent>, medNames: Map<Long, String>): String = buildString {
     append('\uFEFF')
-    appendLine("Data;Ora assunzione;Farmaco;Data prevista;Ora prevista;Timestamp")
+    appendLine("Data;Ora assunzione;Farmaco;Data prevista;Ora prevista;Timestamp;ID evento;ID farmaco")
     intakes.sortedBy { it.takenAtMillis }.forEach { event ->
         val taken = Instant.ofEpochMilli(event.takenAtMillis).atZone(ZoneId.systemDefault())
         val name = event.medicationName.ifBlank { medNames[event.medicationId] ?: "Farmaco eliminato" }
@@ -529,8 +647,184 @@ private fun buildHistoryCsv(intakes: List<IntakeEvent>, medNames: Map<Long, Stri
         append(csvCell(name)).append(';')
         append(csvCell(LocalDate.ofEpochDay(event.plannedEpochDay).itDate())).append(';')
         append(csvCell(event.plannedTime)).append(';')
-        append(event.takenAtMillis).appendLine()
+        append(event.takenAtMillis).append(';')
+        append(event.id).append(';')
+        append(event.medicationId).appendLine()
     }
+}
+
+private fun parseHistoryCsv(
+    raw: String,
+    meds: List<Medication>,
+    existing: List<IntakeEvent>
+): HistoryImportPreview {
+    val lines = raw.replace("\r\n", "\n").replace('\r', '\n')
+        .lineSequence()
+        .filter { it.isNotBlank() }
+        .toList()
+    require(lines.isNotEmpty()) { "Il file è vuoto." }
+
+    val header = parseCsvLine(lines.first()).map { normalizeCsvHeader(it) }
+    fun col(vararg names: String): Int = names.asSequence()
+        .map { normalizeCsvHeader(it) }
+        .map { header.indexOf(it) }
+        .firstOrNull { it >= 0 } ?: -1
+
+    val dateCol = col("Data")
+    val actualTimeCol = col("Ora assunzione", "Ora effettiva")
+    val medCol = col("Farmaco", "Medicinale")
+    val plannedDateCol = col("Data prevista")
+    val plannedTimeCol = col("Ora prevista")
+    val timestampCol = col("Timestamp")
+    val eventIdCol = col("ID evento", "Event ID")
+    val medIdCol = col("ID farmaco", "Medication ID")
+
+    require(medCol >= 0) { "Manca la colonna Farmaco." }
+    require((dateCol >= 0 && actualTimeCol >= 0) || timestampCol >= 0) {
+        "Servono Data + Ora assunzione oppure Timestamp."
+    }
+
+    val dateFormats = listOf(
+        DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+        DateTimeFormatter.ISO_LOCAL_DATE
+    )
+    val timeFormats = listOf(
+        DateTimeFormatter.ofPattern("HH:mm:ss"),
+        DateTimeFormatter.ofPattern("HH:mm")
+    )
+    val zone = ZoneId.systemDefault()
+    val medByName = meds.associateBy { it.name.trim().lowercase() }
+    val existingFingerprints = existing.mapTo(mutableSetOf()) { historyFingerprint(it) }
+    val fileFingerprints = mutableSetOf<String>()
+    val parsed = mutableListOf<IntakeEvent>()
+    var invalid = 0
+    var duplicateInFile = 0
+    var alreadyPresent = 0
+
+    fun value(row: List<String>, index: Int): String = if (index in row.indices) row[index].trim() else ""
+
+    lines.drop(1).forEachIndexed { rowIndex, line ->
+        val row = parseCsvLine(line)
+        val event = runCatching {
+            val name = value(row, medCol).trim()
+            require(name.isNotBlank())
+
+            val timestamp = value(row, timestampCol).toLongOrNull()
+            val actualDate = value(row, dateCol).takeIf { it.isNotBlank() }?.let { parseDateFlexible(it, dateFormats) }
+            val actualTime = value(row, actualTimeCol).takeIf { it.isNotBlank() }?.let { parseTimeFlexible(it, timeFormats) }
+            val fieldsMillis = if (actualDate != null && actualTime != null) {
+                actualDate.atTime(actualTime).atZone(zone).toInstant().toEpochMilli()
+            } else null
+            val takenAtMillis = when {
+                timestamp != null && fieldsMillis != null -> {
+                    val tsLocal = Instant.ofEpochMilli(timestamp).atZone(zone)
+                    if (tsLocal.toLocalDate() == actualDate &&
+                        tsLocal.toLocalTime().withNano(0) == actualTime?.withNano(0)) timestamp else fieldsMillis
+                }
+                fieldsMillis != null -> fieldsMillis
+                timestamp != null -> timestamp
+                else -> error("Data/ora effettiva non valida")
+            }
+
+            val takenLocal = Instant.ofEpochMilli(takenAtMillis).atZone(zone)
+            val plannedDate = value(row, plannedDateCol).takeIf { it.isNotBlank() }
+                ?.let { parseDateFlexible(it, dateFormats) }
+                ?: takenLocal.toLocalDate()
+            val plannedTime = value(row, plannedTimeCol).takeIf { it.isNotBlank() }
+                ?.let { parseTimeFlexible(it, timeFormats) }
+                ?: takenLocal.toLocalTime()
+
+            val activeMed = medByName[name.lowercase()]
+            val medicationId = value(row, medIdCol).toLongOrNull()
+                ?: activeMed?.id
+                ?: stableImportedMedicationId(name)
+            val eventId = value(row, eventIdCol).toLongOrNull()
+                ?: importedEventId(takenAtMillis, name, rowIndex)
+
+            IntakeEvent(
+                id = eventId,
+                medicationId = medicationId,
+                medicationName = name,
+                plannedEpochDay = plannedDate.toEpochDay(),
+                plannedTime = plannedTime.format(DateTimeFormatter.ofPattern("HH:mm")),
+                takenAtMillis = takenAtMillis
+            )
+        }.getOrNull()
+
+        if (event == null) {
+            invalid++
+        } else {
+            val fp = historyFingerprint(event)
+            if (!fileFingerprints.add(fp)) {
+                duplicateInFile++
+            } else {
+                if (fp in existingFingerprints) alreadyPresent++
+                parsed.add(event)
+            }
+        }
+    }
+
+    return HistoryImportPreview(
+        events = parsed,
+        totalRows = lines.size - 1,
+        invalidRows = invalid,
+        duplicateRowsInFile = duplicateInFile,
+        alreadyPresentRows = alreadyPresent
+    )
+}
+
+private fun parseCsvLine(line: String): List<String> {
+    val out = mutableListOf<String>()
+    val current = StringBuilder()
+    var quoted = false
+    var i = 0
+    while (i < line.length) {
+        val ch = line[i]
+        when {
+            ch == '"' && quoted && i + 1 < line.length && line[i + 1] == '"' -> {
+                current.append('"')
+                i++
+            }
+            ch == '"' -> quoted = !quoted
+            ch == ';' && !quoted -> {
+                out.add(current.toString())
+                current.clear()
+            }
+            else -> current.append(ch)
+        }
+        i++
+    }
+    out.add(current.toString())
+    return out
+}
+
+private fun normalizeCsvHeader(value: String): String = value
+    .removePrefix("\uFEFF")
+    .trim()
+    .lowercase()
+    .replace(Regex("\\s+"), " ")
+
+private fun parseDateFlexible(text: String, formats: List<DateTimeFormatter>): LocalDate =
+    formats.asSequence()
+        .mapNotNull { runCatching { LocalDate.parse(text.trim(), it) }.getOrNull() }
+        .firstOrNull() ?: error("Data non valida")
+
+private fun parseTimeFlexible(text: String, formats: List<DateTimeFormatter>): LocalTime =
+    formats.asSequence()
+        .mapNotNull { runCatching { LocalTime.parse(text.trim(), it) }.getOrNull() }
+        .firstOrNull() ?: error("Ora non valida")
+
+private fun stableImportedMedicationId(name: String): Long =
+    -1L - (name.trim().lowercase().hashCode().toLong() and 0x7FFFFFFFL)
+
+private fun importedEventId(takenAtMillis: Long, name: String, rowIndex: Int): Long =
+    takenAtMillis xor (name.hashCode().toLong() shl 16) xor rowIndex.toLong()
+
+private fun historyFingerprint(event: IntakeEvent): String = buildString {
+    append(event.medicationName.trim().lowercase())
+    append('|').append(event.takenAtMillis)
+    append('|').append(event.plannedEpochDay)
+    append('|').append(event.plannedTime.trim())
 }
 
 private fun csvCell(value: String): String {
