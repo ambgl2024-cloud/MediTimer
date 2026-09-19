@@ -1,3 +1,24 @@
+# MediTimer v0.6.3
+
+Correzioni interfaccia per schermi diversi:
+- barra di navigazione inferiore responsive;
+- testo dei menu sempre su una riga;
+- icone e testi leggermente ridotti sui display stretti;
+- fascia dei tasti/gesture Android in verde petrolio, con icone di sistema chiare;
+- fallback anche tramite window.navigationBarColor per dispositivi/OEM che non disegnano edge-to-edge nello stesso modo.
+
+Funzionalità farmaci, scorte, data apertura, countdown, doppio bip e snooze invariate.
+
+# MediTimer v0.6.2
+
+Correzione gestione confezioni:
+- ripristinato il comando Modifica data apertura;
+- Cambiata oggi = registra un nuovo cambio e scala 1 dalla scorta;
+- Modifica data = corregge solo la data e NON modifica la scorta;
+- il prossimo cambio e i promemoria vengono ricalcolati sulla nuova data;
+- restano visibili solo ultimo cambio, giorni mancanti e confezioni rimaste;
+- countdown, doppio bip, snooze e firma stabile invariati.
+
 # MediTimer v0.6.1
 
 - Schermata Confezioni semplificata.

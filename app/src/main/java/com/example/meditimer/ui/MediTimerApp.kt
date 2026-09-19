@@ -5,6 +5,7 @@ import android.app.TimePickerDialog
 import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -16,7 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.NotificationManagerCompat
 import com.example.meditimer.data.*
@@ -73,26 +76,55 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
             )
         },
         bottomBar = {
-            NavigationBar {
-                AppTab.entries.forEach { item ->
-                    NavigationBarItem(
-                        selected = tab == item,
-                        onClick = { tab = item },
-                        icon = {
-                            Icon(
-                                when (item) {
-                                    AppTab.TODAY -> Icons.Default.Today
-                                    AppTab.MEDS -> Icons.Default.Medication
-                                    AppTab.ALARMS -> Icons.Default.Alarm
-                                    AppTab.PACKAGES -> Icons.Default.Inventory2
-                                    AppTab.CALENDAR -> Icons.Default.CalendarMonth
+            Column {
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val compactNavigation = maxWidth < 390.dp
+                    val navIconSize = if (compactNavigation) 19.dp else 22.dp
+                    val navLabelSize = if (compactNavigation) 9.sp else 10.sp
+
+                    NavigationBar(
+                        modifier = Modifier.fillMaxWidth(),
+                        windowInsets = WindowInsets(0, 0, 0, 0)
+                    ) {
+                        AppTab.entries.forEach { item ->
+                            NavigationBarItem(
+                                selected = tab == item,
+                                onClick = { tab = item },
+                                icon = {
+                                    Icon(
+                                        when (item) {
+                                            AppTab.TODAY -> Icons.Default.Today
+                                            AppTab.MEDS -> Icons.Default.Medication
+                                            AppTab.ALARMS -> Icons.Default.Alarm
+                                            AppTab.PACKAGES -> Icons.Default.Inventory2
+                                            AppTab.CALENDAR -> Icons.Default.CalendarMonth
+                                        },
+                                        contentDescription = item.label,
+                                        modifier = Modifier.size(navIconSize)
+                                    )
                                 },
-                                contentDescription = item.label
+                                label = {
+                                    Text(
+                                        text = item.label,
+                                        fontSize = navLabelSize,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Clip
+                                    )
+                                },
+                                alwaysShowLabel = true
                             )
-                        },
-                        label = { Text(item.label) }
-                    )
+                        }
+                    }
                 }
+
+                // Dedicated background behind Android's navigation buttons/gesture area.
+                Spacer(
+                    Modifier
+                        .fillMaxWidth()
+                        .windowInsetsBottomHeight(WindowInsets.navigationBars)
+                        .background(androidx.compose.ui.graphics.Color(0xFF0F766E))
+                )
             }
         }
     ) { padding ->
@@ -159,6 +191,18 @@ private fun AboutDialog(onDismiss: () -> Unit) {
 
     val changelog = remember {
         listOf(
+            "0.6.3" to listOf(
+                "Menu inferiore reso responsive per schermi più stretti.",
+                "Etichette Confezioni e Calendario mantenute su una sola riga con dimensionamento adattivo di testo e icone.",
+                "Area dei tasti/gesture di sistema colorata in verde petrolio per rendere visibili i controlli bianchi.",
+                "Gestione confezioni, scorte, countdown e doppio bip invariati."
+            ),
+            "0.6.2" to listOf(
+                "Ripristinata la modifica manuale della data di apertura dell'ultima confezione.",
+                "Cambiata oggi continua a scalare automaticamente una confezione dalla scorta.",
+                "Modifica data corregge solo la data e non altera la scorta.",
+                "Dopo la correzione vengono ricalcolati i promemoria del prossimo cambio."
+            ),
             "0.6.1" to listOf(
                 "Semplificata la schermata Confezioni.",
                 "Per ogni farmaco vengono mostrati solo ultimo cambio, giorni mancanti e confezioni rimaste.",
@@ -1098,26 +1142,39 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                             Spacer(Modifier.width(6.dp))
                             Text("Cambiata oggi")
                         }
-                        OutlinedButton(onClick = { stockAction = StockAction(med, StockMode.SET) }, modifier = Modifier.weight(1f)) {
-                            Text("Imposta scorta")
+                        OutlinedButton(
+                            onClick = {
+                                showDatePicker(context, last ?: today) { selected ->
+                                    updatePackageOpeningDate(context, repo, med, selected, refresh)
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.CalendarMonth, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Modifica data")
                         }
                     }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { stockAction = StockAction(med, StockMode.SET) }, modifier = Modifier.weight(1f)) {
+                            Text("Imposta scorta")
+                        }
                         OutlinedButton(onClick = { stockAction = StockAction(med, StockMode.ADD) }, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Default.Add, contentDescription = null)
                             Spacer(Modifier.width(4.dp))
                             Text("Acquisto")
                         }
-                        OutlinedButton(
-                            onClick = { stockAction = StockAction(med, StockMode.REMOVE) },
-                            enabled = (med.stockCount ?: 0) > 0,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Remove, contentDescription = null)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Scarto")
-                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { stockAction = StockAction(med, StockMode.REMOVE) },
+                        enabled = (med.stockCount ?: 0) > 0,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Remove, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Scarto")
                     }
 
                     Text(
@@ -1229,6 +1286,24 @@ private fun registerPackageChange(
     }
     refresh()
 }
+
+
+private fun updatePackageOpeningDate(
+    context: Context,
+    repo: MedicationRepository,
+    medication: Medication,
+    date: LocalDate,
+    refresh: () -> Unit
+) {
+    val updated = medication.copy(lastPackageChangeEpochDay = date.toEpochDay())
+    repo.upsertMedication(updated)
+
+    // Correzione della data registrata: la scorta non viene modificata.
+    repo.clearPackageReminderState(updated.id)
+    Scheduler.scheduleNextPackageReminder(context, updated)
+    refresh()
+}
+
 
 private fun packageRemainingLabel(remaining: Long?): String = when {
     remaining == null -> ""
