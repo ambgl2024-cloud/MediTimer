@@ -157,6 +157,11 @@ private fun AboutDialog(onDismiss: () -> Unit) {
 
     val changelog = remember {
         listOf(
+            "0.5.6" to listOf(
+                "Ripristinato il doppio bip originale di fine countdown.",
+                "Aggiunto un breve pre-roll silenzioso per evitare che il primo bip venga tagliato quando Android riattiva l'audio a schermo spento.",
+                "Mantenuti exact alarm, WAKE_LOCK, persistenza countdown e nessun suono intermedio."
+            ),
             "0.5.5" to listOf(
                 "Ripristinato il bip personalizzato di fine countdown tramite exact alarm e SoundHelper.",
                 "Ripristinato WAKE_LOCK senza richieste all'utente e mantenuta la persistenza del countdown.",

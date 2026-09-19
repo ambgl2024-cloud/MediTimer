@@ -1,3 +1,14 @@
+# MediTimer v0.5.6
+
+Correzione doppio bip di fine countdown:
+- stesso doppio bip originale;
+- 250 ms di silenzio iniziale per evitare il taglio del primo bip a schermo spento;
+- nessun bip intermedio;
+- countdown persistente;
+- exact alarm + WAKE_LOCK;
+- snooze configurabile per farmaco;
+- schermata Info/versione/changelog.
+
 # MediTimer v0.5.5
 
 Release di correzione del countdown finale.
