@@ -84,11 +84,13 @@ class MedicationRepository(context: Context) {
     fun addCountdown(countdown: ActiveCountdown) {
         val list = getCountdownsRaw().filterNot { it.id == countdown.id }.toMutableList()
         list.add(countdown)
-        saveArray("countdowns", list.map { it.toJson() })
+        // Countdown state is critical: commit synchronously so it survives an immediate
+        // page change, app backgrounding or process termination.
+        saveArraySync("countdowns", list.map { it.toJson() })
     }
 
     fun removeCountdown(id: Long) {
-        saveArray("countdowns", getCountdownsRaw().filterNot { it.id == id }.map { it.toJson() })
+        saveArraySync("countdowns", getCountdownsRaw().filterNot { it.id == id }.map { it.toJson() })
     }
 
     fun getPendingSnoozes(): List<PendingSnooze> =
@@ -100,11 +102,11 @@ class MedicationRepository(context: Context) {
     fun upsertPendingSnooze(snooze: PendingSnooze) {
         val list = getPendingSnoozes().filterNot { it.key == snooze.key }.toMutableList()
         list.add(snooze)
-        saveArray("snoozes", list.map { it.toJson() })
+        saveArraySync("snoozes", list.map { it.toJson() })
     }
 
     fun removePendingSnooze(medicationId: Long, epochDay: Long, plannedTime: String) {
-        saveArray(
+        saveArraySync(
             "snoozes",
             getPendingSnoozes().filterNot {
                 it.medicationId == medicationId &&
@@ -143,15 +145,24 @@ class MedicationRepository(context: Context) {
 
     private fun <T> parseArray(key: String, mapper: (org.json.JSONObject) -> T): List<T> {
         val raw = prefs.getString(key, "[]") ?: "[]"
-        return runCatching {
-            val a = JSONArray(raw)
-            buildList { for (i in 0 until a.length()) add(mapper(a.getJSONObject(i))) }
-        }.getOrDefault(emptyList())
+        val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+        return buildList {
+            for (i in 0 until array.length()) {
+                val item = runCatching { mapper(array.getJSONObject(i)) }.getOrNull()
+                if (item != null) add(item)
+            }
+        }
     }
 
     private fun saveArray(key: String, objects: List<org.json.JSONObject>) {
         val a = JSONArray()
         objects.forEach { a.put(it) }
         prefs.edit().putString(key, a.toString()).apply()
+    }
+
+    private fun saveArraySync(key: String, objects: List<org.json.JSONObject>) {
+        val a = JSONArray()
+        objects.forEach { a.put(it) }
+        prefs.edit().putString(key, a.toString()).commit()
     }
 }

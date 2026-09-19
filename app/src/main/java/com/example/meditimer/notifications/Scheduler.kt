@@ -106,10 +106,11 @@ object Scheduler {
 
     fun restoreCountdowns(context: Context) {
         val repo = MedicationRepository(context)
+        // Re-arm every persisted countdown. If its end time has already passed (for example
+        // after process death/reboot), scheduleAlarm receives a near-immediate trigger so
+        // the completion alert is not silently lost.
         repo.getCountdowns().forEach { countdown ->
-            if (countdown.endMillis > System.currentTimeMillis()) {
-                scheduleCountdownFinishFallback(context, countdown)
-            }
+            scheduleCountdownFinishFallback(context, countdown)
         }
     }
 
@@ -125,8 +126,15 @@ object Scheduler {
     }
 
     private fun scheduleCountdownFinishFallback(context: Context, countdown: ActiveCountdown) {
-        val pi = countdownFinishPendingIntent(context, countdown.id, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
-        scheduleAlarm(context, countdown.endMillis, pi)
+        val pi = countdownFinishPendingIntent(
+            context = context,
+            countdownId = countdown.id,
+            baseFlag = PendingIntent.FLAG_UPDATE_CURRENT,
+            medicationName = countdown.medicationName,
+            note = countdown.note
+        ) ?: return
+        val triggerAt = maxOf(countdown.endMillis, System.currentTimeMillis() + 500L)
+        scheduleAlarm(context, triggerAt, pi)
     }
 
     private fun scheduleAlarm(context: Context, trigger: Long, pi: PendingIntent) {
@@ -146,10 +154,18 @@ object Scheduler {
         }
     }
 
-    private fun countdownFinishPendingIntent(context: Context, countdownId: Long, baseFlag: Int): PendingIntent? {
+    private fun countdownFinishPendingIntent(
+        context: Context,
+        countdownId: Long,
+        baseFlag: Int,
+        medicationName: String? = null,
+        note: String? = null
+    ): PendingIntent? {
         val intent = Intent(context, CountdownReceiver::class.java).apply {
             action = CountdownReceiver.ACTION_FINISH
             putExtra(CountdownReceiver.EXTRA_COUNTDOWN_ID, countdownId)
+            medicationName?.let { putExtra(CountdownReceiver.EXTRA_MEDICATION_NAME, it) }
+            note?.let { putExtra(CountdownReceiver.EXTRA_NOTE, it) }
         }
         return PendingIntent.getBroadcast(
             context,

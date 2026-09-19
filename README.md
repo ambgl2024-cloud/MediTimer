@@ -1,43 +1,62 @@
-# MediTimer Android — v0.5.1
+# MediTimer Android — v0.5.3
 
-MediTimer è un'app Android locale/offline per gestire farmaci periodici, promemoria, countdown post-assunzione, cambio confezione e storico delle assunzioni.
+Versione correttiva focalizzata sull'affidabilità del countdown.
 
+## Countdown persistente
 
-## Novità v0.5.1 — Snooze per farmaco
+Il countdown non dipende più dal ciclo di vita della sola schermata **Oggi**.
 
-- Ogni farmaco ha un parametro **Snooze tra gli avvisi (minuti)**, con default 10 minuti.
-- La notifica propone **Farmaco assunto** e **Rimanda X min**.
-- Lo snooze può essere ripetuto più volte.
-- Premendo **Assunto**, lo snooze pendente della dose viene cancellato.
-- Gli snooze pendenti vengono salvati localmente e ripristinati dopo un riavvio del telefono.
-- Lo snooze non modifica data/orario programmati della dose e non crea eventi nello storico finché il farmaco non viene realmente segnato come assunto.
+- lo stato viene salvato in modo sincrono su storage locale;
+- l'ora di fine (`endMillis`) resta la fonte di verità;
+- il clock usato per visualizzare il tempo residuo vive a livello dell'app, quindi cambiare scheda non resetta il countdown;
+- chiudendo e riaprendo normalmente l'app, il countdown viene riletto dallo storage e riprende dal tempo residuo corretto;
+- a schermo spento il countdown non richiede un servizio continuo: l'avviso finale è affidato ad `AlarmManager`;
+- dopo un riavvio del telefono o un processo terminato, i countdown persistiti vengono riarmati.
 
-## Novità v0.5.0
+> Nota: come per qualunque app Android, un **Arresto forzato / Force stop** dalle impostazioni di sistema può impedire ad Android di consegnare allarmi finché l'app non viene aperta di nuovo.
 
-- Rimossi i beep intermedi del countdown.
-- Rimossa la richiesta di esclusione dal risparmio energetico.
-- Il countdown continua a essere calcolato tramite timestamp e viene notificato solo al termine tramite exact alarm.
-- Durata predefinita del countdown per un nuovo farmaco: **2 minuti**.
-- Se imposti più assunzioni giornaliere, gli orari proposti sono equidistanti sulle 24 ore a partire dal primo orario: 2 = ogni 12h, 3 = ogni 8h, 4 = ogni 6h.
-- Gli orari si impostano tramite selettore Android in formato **24 ore HH:mm**, non più come testo libero.
-- Modificando il primo orario con più assunzioni, gli altri vengono ricalcolati equidistanti; puoi poi modificare ogni singolo orario manualmente.
-- Restano import/export CSV, modifica/cancellazione eventi del Calendario e storico permanente anche dopo l'eliminazione di un farmaco.
+## Fine countdown: ritorno al meccanismo affidabile
 
-## Firma stabile
+Il suono personalizzato `MediaPlayer` non viene usato per l'avviso finale.
 
-La build release usa i GitHub Actions Secrets già configurati:
+La fine countdown usa un nuovo NotificationChannel:
+
+`countdown_alarm_v4`
+
+configurato con il **suono allarme predefinito di Android**, lo stesso meccanismo che nelle prime versioni di MediTimer funzionava correttamente anche con schermo spento.
+
+Flusso:
+
+`Exact Alarm -> BroadcastReceiver -> NotificationChannel Android -> suono + vibrazione + notifica`
+
+L'exact alarm contiene anche una copia di nome farmaco e nota del countdown. Quindi l'avviso finale può essere emesso anche se il processo dell'app è stato ricreato e lo stato UI non è disponibile.
+
+## Funzioni mantenute
+
+- snooze configurabile per ciascun farmaco;
+- pulsanti `Farmaco assunto` e `Rimanda X min` nella notifica;
+- countdown predefinito 2 minuti per i nuovi farmaci;
+- nessun bip intermedio;
+- nessuna richiesta di disattivare il risparmio energetico;
+- orari multipli equidistanti di default;
+- selettore orario Android HH:mm 24 ore;
+- storico calendario modificabile;
+- import/export CSV;
+- storico mantenuto anche dopo eliminazione farmaco;
+- firma release stabile.
+
+## Versione
+
+- `versionCode = 10`
+- `versionName = 0.5.3`
+
+## Firma
+
+Il workflow continua a usare gli stessi GitHub Secrets:
 
 - `MEDITIMER_KEYSTORE_BASE64`
 - `MEDITIMER_STORE_PASSWORD`
 - `MEDITIMER_KEY_ALIAS`
 - `MEDITIMER_KEY_PASSWORD`
 
-Il workflow compila `assembleRelease`, verifica il fingerprint della chiave MediTimer e pubblica `app-release.apk`.
-
-## Permessi Android
-
-MediTimer richiede solo i permessi necessari per notifiche, allarmi precisi, reboot e vibrazione. Non richiede più l'esclusione dalle ottimizzazioni batteria né un foreground service per il countdown.
-
-## Nota aggiornamento v0.5.1 FIX
-
-Il browser uploader di GitHub sovrascrive i file presenti ma non elimina automaticamente i file rimossi dal progetto. Per questo il pacchetto include un `CountdownService.kt` neutro che sovrascrive eventuali copie obsolete provenienti dalle versioni precedenti. Il servizio non viene utilizzato dall'app.
+Non modificare questi valori.

@@ -1,16 +1,25 @@
-MediTimer v0.5.1 - upload GitHub
+MEDITIMER v0.5.3 — UPLOAD GITHUB
 
-1. Estrai questo ZIP.
+1. Estrai tutto lo ZIP.
 2. Carica/sovrascrivi i file nel repository MediTimer.
-3. Verifica manualmente `.github/workflows/build-apk.yml`: deve contenere `gradle :app:assembleRelease --stacktrace`.
-4. NON modificare i quattro GitHub Secrets della firma stabile.
-5. Fai Commit changes su main.
-6. In Actions attendi il workflow verde.
-7. Scarica l'artifact `MediTimer-APK`: deve contenere `app-release.apk`.
+3. Assicurati che .github/workflows/build-apk.yml resti presente.
+4. Il workflow deve compilare:
+   gradle :app:assembleRelease --stacktrace
+5. Fai Commit changes.
+6. Attendi GitHub Actions.
+7. Scarica l'artifact MediTimer-APK.
+8. Installa app-release.apk.
 
-Novita v0.5.1:
-- nessun bip intermedio del countdown;
-- nessuna richiesta di esclusione dal risparmio energetico;
-- countdown nuovo farmaco: 2 minuti di default;
-- orari multipli equidistanti di default sulle 24 ore;
-- selettore orario Android HH:mm 24h.
+Versione: 0.5.3
+VersionCode: 10
+
+TEST CONSIGLIATO COUNTDOWN
+- imposta countdown a 2 minuti;
+- premi Assunto;
+- verifica che compaia il countdown;
+- cambia scheda e torna a Oggi: il tempo deve continuare;
+- esci normalmente dall'app e riaprila: deve mostrare il tempo residuo corretto;
+- ripeti con schermo spento fino alla scadenza;
+- a 0 deve arrivare l'avviso con il suono allarme Android + vibrazione.
+
+NOTA: un Arresto forzato (Force stop) da Impostazioni Android blocca gli allarmi dell'app finché non viene riaperta; è un comportamento del sistema Android.

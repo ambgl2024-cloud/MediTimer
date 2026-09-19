@@ -47,6 +47,18 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     fun refresh() { revision++ }
     val meds = remember(revision) { repo.getMedications() }
 
+    // One app-level clock keeps countdown rendering independent from the selected tab.
+    // The countdown itself is persisted in MedicationRepository; this clock only renders
+    // the remaining time from the stored endMillis.
+    var clockNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            clockNow = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    val activeCountdowns = remember(clockNow, revision) { repo.getActiveCountdowns(clockNow) }
+
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -74,7 +86,15 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (tab) {
-                AppTab.TODAY -> TodayScreen(meds, repo, revision, ::refresh, requestExactAlarmPermission)
+                AppTab.TODAY -> TodayScreen(
+                    meds = meds,
+                    repo = repo,
+                    revision = revision,
+                    refresh = ::refresh,
+                    requestExactAlarmPermission = requestExactAlarmPermission,
+                    now = clockNow,
+                    countdowns = activeCountdowns
+                )
                 AppTab.MEDS -> MedicationListScreen(
                     meds = meds,
                     onAdd = { creating = true },
@@ -124,18 +144,12 @@ private fun TodayScreen(
     repo: MedicationRepository,
     revision: Int,
     refresh: () -> Unit,
-    requestExactAlarmPermission: () -> Unit
+    requestExactAlarmPermission: () -> Unit,
+    now: Long,
+    countdowns: List<ActiveCountdown>
 ) {
     val context = LocalContext.current
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(1_000)
-        }
-    }
     val today = remember(now) { Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate() }
-    val countdowns = remember(now, revision) { repo.getActiveCountdowns(now) }
     val doses = remember(meds, today, revision) {
         meds.filter { it.isActiveOn(today) }
             .flatMap { med -> med.alarmTimes.map { time -> med to time } }
