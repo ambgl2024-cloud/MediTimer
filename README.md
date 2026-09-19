@@ -1,3 +1,14 @@
+# MediTimer v0.6.6
+
+Gestione confezioni differenziata per singolo farmaco:
+- farmaci a giorni: menu invariato;
+- farmaci a numero di assunzioni: `Imposta scorta` + `Imposta assunzioni rimaste` sulla stessa riga;
+- `Acquisto` + `Scarto` restano affiancati;
+- il residuo manuale della confezione continua a decrementarsi a ogni registrazione `Assunto`;
+- `Cambiata oggi` resetta il residuo al massimo configurato;
+- `Modifica data` ricalcola il conteggio sulla nuova data;
+- countdown, doppio bip, snooze e barra responsive invariati.
+
 # MediTimer v0.6.5
 
 Layout sezione Confezioni aggiornato:

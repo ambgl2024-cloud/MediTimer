@@ -192,6 +192,13 @@ private fun AboutDialog(onDismiss: () -> Unit) {
 
     val changelog = remember {
         listOf(
+            "0.6.6" to listOf(
+                "Gestione Confezioni differenziata per singolo farmaco.",
+                "Per i farmaci con durata in assunzioni è possibile impostare manualmente le assunzioni rimaste della confezione in uso.",
+                "Imposta scorta e Imposta assunzioni rimaste sono affiancati solo per i farmaci a conteggio.",
+                "I farmaci con durata in giorni mantengono il menu precedente.",
+                "Il residuo manuale continua a diminuire automaticamente a ogni Assunto e si resetta al nuovo cambio confezione."
+            ),
             "0.6.5" to listOf(
                 "Riorganizzati i pulsanti nella sezione Confezioni.",
                 "Imposta scorta ora occupa una riga intera.",
@@ -1080,6 +1087,7 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
     val context = LocalContext.current
     val today = LocalDate.now()
     var stockAction by remember { mutableStateOf<StockAction?>(null) }
+    var intakeRemainingMedication by remember { mutableStateOf<Medication?>(null) }
 
     val warnings = meds.flatMap { med ->
         val items = mutableListOf<String>()
@@ -1214,11 +1222,36 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                         }
                     }
 
-                    OutlinedButton(
-                        onClick = { stockAction = StockAction(med, StockMode.SET) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Imposta scorta")
+                    if (med.packageDurationMode == PackageDurationMode.INTAKES) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { stockAction = StockAction(med, StockMode.SET) },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Imposta scorta", fontSize = 12.sp, maxLines = 1)
+                            }
+                            OutlinedButton(
+                                onClick = { intakeRemainingMedication = med },
+                                enabled = med.lastPackageChangeEpochDay != null,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    "Imposta assunzioni rimaste",
+                                    fontSize = 11.sp,
+                                    maxLines = 2
+                                )
+                            }
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { stockAction = StockAction(med, StockMode.SET) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Imposta scorta")
+                        }
                     }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1279,6 +1312,68 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
             }
         )
     }
+
+    intakeRemainingMedication?.let { medication ->
+        val currentRemaining = repo.getPackageIntakesRemaining(medication)
+            ?: medication.packageMaxIntakes
+
+        IntakeRemainingAdjustmentDialog(
+            medication = medication,
+            currentRemaining = currentRemaining,
+            onDismiss = { intakeRemainingMedication = null },
+            onConfirm = { desiredRemaining ->
+                val rawRemaining = medication.packageMaxIntakes - repo.getPackageIntakesUsed(medication)
+                val updated = medication.copy(
+                    packageIntakesAdjustment = desiredRemaining - rawRemaining
+                )
+                repo.upsertMedication(updated)
+                repo.clearPackageReminderState(updated.id)
+                Scheduler.scheduleNextPackageReminder(context, updated)
+                intakeRemainingMedication = null
+                refresh()
+            }
+        )
+    }
+}
+
+@Composable
+private fun IntakeRemainingAdjustmentDialog(
+    medication: Medication,
+    currentRemaining: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit
+) {
+    var remainingText by remember(medication, currentRemaining) {
+        mutableStateOf(currentRemaining.coerceAtLeast(0).toString())
+    }
+    val remaining = remainingText.toIntOrNull()
+    val maxIntakes = medication.packageMaxIntakes.coerceAtLeast(1)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Assunzioni rimaste · ${medication.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Durata confezione: $maxIntakes assunzioni")
+                Text("Residuo attuale: ${currentRemaining.coerceAtLeast(0)}")
+                OutlinedTextField(
+                    value = remainingText,
+                    onValueChange = { remainingText = it.filter(Char::isDigit) },
+                    label = { Text("Assunzioni rimaste nella confezione") },
+                    supportingText = { Text("Valore da 0 a $maxIntakes") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(remaining ?: 0) },
+                enabled = remaining != null && remaining in 0..maxIntakes
+            ) { Text("Conferma") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annulla") } }
+    )
 }
 
 private enum class StockMode { ADD, REMOVE, SET }
@@ -1336,6 +1431,7 @@ private fun registerPackageChange(
         lastPackageChangeEpochDay = date.toEpochDay(),
         lastPackageChangeMillis = if (date == LocalDate.now()) System.currentTimeMillis() else
             date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+        packageIntakesAdjustment = 0,
         stockCount = newStock
     )
     repo.upsertMedication(updated)
@@ -1363,7 +1459,8 @@ private fun updatePackageOpeningDate(
 ) {
     val updated = medication.copy(
         lastPackageChangeEpochDay = date.toEpochDay(),
-        lastPackageChangeMillis = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        lastPackageChangeMillis = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+        packageIntakesAdjustment = 0
     )
     repo.upsertMedication(updated)
 
@@ -1593,6 +1690,12 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                             packageDurationMode = packageDurationMode,
                             packageMaxDays = if (packageDurationMode == PackageDurationMode.DAYS) pDays else 0,
                             packageMaxIntakes = if (packageDurationMode == PackageDurationMode.INTAKES) pIntakes else 0,
+                            packageIntakesAdjustment =
+                                if (
+                                    packageDurationMode == PackageDurationMode.INTAKES &&
+                                    initial?.packageDurationMode == PackageDurationMode.INTAKES &&
+                                    initial.packageMaxIntakes == pIntakes
+                                ) initial.packageIntakesAdjustment else 0,
                             lastPackageChangeEpochDay = initial?.lastPackageChangeEpochDay,
                             lastPackageChangeMillis = initial?.lastPackageChangeMillis,
                             stockCount = initial?.stockCount,

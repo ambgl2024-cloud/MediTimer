@@ -83,7 +83,7 @@ class MedicationRepository(context: Context) {
 
     fun getPackageIntakesRemaining(medication: Medication): Int? {
         if (medication.packageDurationMode != PackageDurationMode.INTAKES || medication.lastPackageChangeEpochDay == null) return null
-        return medication.packageMaxIntakes - getPackageIntakesUsed(medication)
+        return medication.packageMaxIntakes - getPackageIntakesUsed(medication) + medication.packageIntakesAdjustment
     }
 
     private fun getCountdownsRaw(): List<ActiveCountdown> = parseArray("countdowns") { ActiveCountdown.fromJson(it) }

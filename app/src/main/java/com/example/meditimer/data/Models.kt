@@ -23,6 +23,7 @@ data class Medication(
     val packageDurationMode: PackageDurationMode = PackageDurationMode.DAYS,
     val packageMaxDays: Int = 30,
     val packageMaxIntakes: Int = 0,
+    val packageIntakesAdjustment: Int = 0,
     val lastPackageChangeEpochDay: Long? = null,
     val lastPackageChangeMillis: Long? = null,
     val stockCount: Int? = null,
@@ -59,6 +60,7 @@ data class Medication(
         put("packageDurationMode", packageDurationMode.name)
         put("packageMaxDays", packageMaxDays)
         put("packageMaxIntakes", packageMaxIntakes)
+        put("packageIntakesAdjustment", packageIntakesAdjustment)
         if (lastPackageChangeEpochDay != null) put("lastPackageChangeEpochDay", lastPackageChangeEpochDay)
         if (lastPackageChangeMillis != null) put("lastPackageChangeMillis", lastPackageChangeMillis)
         if (stockCount != null) put("stockCount", stockCount)
@@ -91,6 +93,7 @@ data class Medication(
                 packageDurationMode = mode,
                 packageMaxDays = if (mode == PackageDurationMode.DAYS) storedDays.coerceAtLeast(1) else 0,
                 packageMaxIntakes = if (mode == PackageDurationMode.INTAKES) storedIntakes.coerceAtLeast(1) else 0,
+                packageIntakesAdjustment = if (mode == PackageDurationMode.INTAKES) o.optInt("packageIntakesAdjustment", 0) else 0,
                 lastPackageChangeEpochDay = if (o.has("lastPackageChangeEpochDay")) o.optLong("lastPackageChangeEpochDay") else null,
                 lastPackageChangeMillis = if (o.has("lastPackageChangeMillis")) o.optLong("lastPackageChangeMillis") else null,
                 stockCount = if (o.has("stockCount") && !o.isNull("stockCount")) o.optInt("stockCount", 0).coerceAtLeast(0) else null,
