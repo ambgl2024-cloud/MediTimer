@@ -5,7 +5,13 @@ import android.content.Context
 import android.content.Intent
 import com.example.meditimer.data.MedicationRepository
 
-/** Final countdown alarm. The notification channel itself plays the alarm sound. */
+/**
+ * Final countdown alarm.
+ *
+ * The exact AlarmManager event wakes this receiver. The custom countdown bip is played
+ * with USAGE_ALARM by SoundHelper, while the notification channel is intentionally silent
+ * so Android does not add its default alarm ringtone on top of the custom sound.
+ */
 class CountdownReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_FINISH) return
@@ -13,12 +19,10 @@ class CountdownReceiver : BroadcastReceiver() {
         val id = intent.getLongExtra(EXTRA_COUNTDOWN_ID, -1L)
         if (id < 0L) return
 
-        val repo = MedicationRepository(context)
+        val appContext = context.applicationContext
+        val repo = MedicationRepository(appContext)
         val stored = repo.getCountdown(id)
 
-        // The alarm also carries a copy of the essential countdown data. This means the
-        // final alert can still be emitted even if Android killed the app process and the
-        // in-memory/UI state has been recreated before the alarm fires.
         val medicationName = stored?.medicationName
             ?: intent.getStringExtra(EXTRA_MEDICATION_NAME)
             ?: "Farmaco"
@@ -26,8 +30,23 @@ class CountdownReceiver : BroadcastReceiver() {
             ?: intent.getStringExtra(EXTRA_NOTE)
             ?: ""
 
+        // Remove persisted state immediately: the countdown has reached zero.
         repo.removeCountdown(id)
-        NotificationHelper.showCountdownFinished(context, medicationName, note, id)
+
+        // Post the visual/vibration notification immediately. Its channel has no sound.
+        NotificationHelper.showCountdownFinished(appContext, medicationName, note, id)
+
+        // Keep the broadcast alive while the short custom bip is played. This is the same
+        // custom final sound mechanism that worked in the earlier versions, but without the
+        // old minute-by-minute foreground service.
+        val pendingResult = goAsync()
+        Thread {
+            try {
+                SoundHelper.playCountdownFinished(appContext)
+            } finally {
+                pendingResult.finish()
+            }
+        }.start()
     }
 
     companion object {

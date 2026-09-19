@@ -1,14 +1,14 @@
-# MediTimer v0.5.4
+# MediTimer v0.5.5
 
-Versione Android locale/offline di MediTimer.
+Release di correzione del countdown finale.
 
-## Novità v0.5.4
-- Fine countdown: ripristinato esattamente il canale `countdown_alarm_v1` delle versioni iniziali, con suono allarme Android e vibrazione.
-- Il countdown persistente introdotto in v0.5.3 resta invariato.
-- Aggiunta schermata **Info MediTimer** accessibile dall'icona `i` nella barra superiore.
-- La schermata mostra la versione realmente installata e il changelog delle release.
+- Countdown persistente tra pagine, uscita/riapertura app e schermo spento.
+- Nessun bip intermedio.
+- Fine countdown: exact AlarmManager + bip personalizzato `countdown_finish.wav` tramite `SoundHelper`.
+- `WAKE_LOCK` ripristinato solo per mantenere il breve audio finale; non richiede alcun consenso o esclusione dal risparmio energetico.
+- NotificationChannel finale intenzionalmente silenzioso: vibra e mostra la notifica, ma non riproduce la suoneria sveglia Android.
+- Snooze configurabile per ogni farmaco.
+- Info app con versione installata e changelog.
+- Firma release stabile tramite GitHub Secrets.
 
-## Build
-La GitHub Action compila `assembleRelease` e usa la firma stabile configurata nei GitHub Secrets.
-
-Versione: `0.5.4` — versionCode `11`.
+Versione: `0.5.5` (`versionCode 12`).

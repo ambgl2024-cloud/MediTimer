@@ -20,7 +20,7 @@ object SoundHelper {
             .build()
 
         val audioManager = context.getSystemService(AudioManager::class.java)
-        val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(attrs)
             .setOnAudioFocusChangeListener { }
             .build()

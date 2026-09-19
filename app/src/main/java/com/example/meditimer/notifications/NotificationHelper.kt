@@ -15,7 +15,7 @@ import com.example.meditimer.data.Medication
 
 object NotificationHelper {
     const val CHANNEL_MED = "medication_alarm_v1"
-    const val CHANNEL_COUNTDOWN = "countdown_alarm_v1"
+    const val CHANNEL_COUNTDOWN = "countdown_finish_visual_v5"
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -33,10 +33,14 @@ object NotificationHelper {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_COUNTDOWN, "Fine countdown", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Avvisi al termine dell'attesa dopo l'assunzione"
-                setSound(alarmUri, attrs)
+                // The custom end-of-countdown bip is played by SoundHelper.
+                // Keep this channel silent to avoid the Android alarm ringtone playing as well.
+                setSound(null, null)
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 250, 500)
             }
         )
+        nm.deleteNotificationChannel("countdown_alarm_v1")
         nm.deleteNotificationChannel("countdown_alarm_v2")
         nm.deleteNotificationChannel("countdown_alarm_v3")
         nm.deleteNotificationChannel("countdown_alarm_v4")
