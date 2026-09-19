@@ -1,3 +1,11 @@
+# MediTimer v0.6.5
+
+Layout sezione Confezioni aggiornato:
+- Cambiata oggi + Modifica data sulla prima riga;
+- Imposta scorta a tutta larghezza;
+- Acquisto + Scarto sulla stessa riga;
+- logica funzionale invariata.
+
 # MediTimer v0.6.4
 
 Nuova gestione durata confezione:

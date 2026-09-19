@@ -192,6 +192,12 @@ private fun AboutDialog(onDismiss: () -> Unit) {
 
     val changelog = remember {
         listOf(
+            "0.6.5" to listOf(
+                "Riorganizzati i pulsanti nella sezione Confezioni.",
+                "Imposta scorta ora occupa una riga intera.",
+                "Acquisto e Scarto sono affiancati sulla stessa riga.",
+                "Nessuna modifica alla logica di scorte, avvisi o countdown."
+            ),
             "0.6.4" to listOf(
                 "Aggiunta la durata confezione per numero di assunzioni in alternativa ai giorni.",
                 "Per ogni farmaco si può scegliere un solo criterio: giorni oppure assunzioni.",
@@ -1208,25 +1214,31 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                         }
                     }
 
+                    OutlinedButton(
+                        onClick = { stockAction = StockAction(med, StockMode.SET) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Imposta scorta")
+                    }
+
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { stockAction = StockAction(med, StockMode.SET) }, modifier = Modifier.weight(1f)) {
-                            Text("Imposta scorta")
-                        }
-                        OutlinedButton(onClick = { stockAction = StockAction(med, StockMode.ADD) }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            onClick = { stockAction = StockAction(med, StockMode.ADD) },
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Icon(Icons.Default.Add, contentDescription = null)
                             Spacer(Modifier.width(4.dp))
                             Text("Acquisto")
                         }
-                    }
-
-                    OutlinedButton(
-                        onClick = { stockAction = StockAction(med, StockMode.REMOVE) },
-                        enabled = (med.stockCount ?: 0) > 0,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Remove, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("Scarto")
+                        OutlinedButton(
+                            onClick = { stockAction = StockAction(med, StockMode.REMOVE) },
+                            enabled = (med.stockCount ?: 0) > 0,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Remove, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Scarto")
+                        }
                     }
 
                     Text(
