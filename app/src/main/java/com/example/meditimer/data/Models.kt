@@ -7,6 +7,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 enum class RecurrenceType { DAILY, WEEKDAYS, EVERY_N_DAYS, MONTHLY_DAYS }
+enum class PackageDurationMode { DAYS, INTAKES }
 
 data class Medication(
     val id: Long = System.currentTimeMillis(),
@@ -19,8 +20,11 @@ data class Medication(
     val anchorEpochDay: Long = LocalDate.now().toEpochDay(),
     val monthlyDays: Set<Int> = emptySet(),
     val alarmTimes: List<String> = listOf("08:00"),
+    val packageDurationMode: PackageDurationMode = PackageDurationMode.DAYS,
     val packageMaxDays: Int = 30,
+    val packageMaxIntakes: Int = 0,
     val lastPackageChangeEpochDay: Long? = null,
+    val lastPackageChangeMillis: Long? = null,
     val stockCount: Int? = null,
     val countdownEnabled: Boolean = false,
     val countdownMinutes: Int = 0,
@@ -52,8 +56,11 @@ data class Medication(
         put("anchorEpochDay", anchorEpochDay)
         put("monthlyDays", JSONArray(monthlyDays.sorted()))
         put("alarmTimes", JSONArray(alarmTimes))
+        put("packageDurationMode", packageDurationMode.name)
         put("packageMaxDays", packageMaxDays)
+        put("packageMaxIntakes", packageMaxIntakes)
         if (lastPackageChangeEpochDay != null) put("lastPackageChangeEpochDay", lastPackageChangeEpochDay)
+        if (lastPackageChangeMillis != null) put("lastPackageChangeMillis", lastPackageChangeMillis)
         if (stockCount != null) put("stockCount", stockCount)
         put("countdownEnabled", countdownEnabled)
         put("countdownMinutes", countdownMinutes)
@@ -63,26 +70,37 @@ data class Medication(
     }
 
     companion object {
-        fun fromJson(o: JSONObject): Medication = Medication(
-            id = o.getLong("id"),
-            name = o.getString("name"),
-            doseNote = o.optString("doseNote"),
-            timesPerActiveDay = o.optInt("timesPerActiveDay", 1),
-            recurrenceType = runCatching { RecurrenceType.valueOf(o.optString("recurrenceType", "DAILY")) }.getOrDefault(RecurrenceType.DAILY),
-            weekdays = o.optJSONArray("weekdays").toIntSet(),
-            everyNDays = o.optInt("everyNDays", 1).coerceAtLeast(1),
-            anchorEpochDay = o.optLong("anchorEpochDay", LocalDate.now().toEpochDay()),
-            monthlyDays = o.optJSONArray("monthlyDays").toIntSet(),
-            alarmTimes = o.optJSONArray("alarmTimes").toStringList().ifEmpty { listOf("08:00") },
-            packageMaxDays = o.optInt("packageMaxDays", 30).coerceAtLeast(1),
-            lastPackageChangeEpochDay = if (o.has("lastPackageChangeEpochDay")) o.optLong("lastPackageChangeEpochDay") else null,
-            stockCount = if (o.has("stockCount") && !o.isNull("stockCount")) o.optInt("stockCount", 0).coerceAtLeast(0) else null,
-            countdownEnabled = o.optBoolean("countdownEnabled", false),
-            countdownMinutes = o.optInt("countdownMinutes", 0),
-            countdownNote = o.optString("countdownNote"),
-            snoozeMinutes = o.optInt("snoozeMinutes", 10).coerceAtLeast(1),
-            enabled = o.optBoolean("enabled", true)
-        )
+        fun fromJson(o: JSONObject): Medication {
+            val storedIntakes = o.optInt("packageMaxIntakes", 0).coerceAtLeast(0)
+            val mode = runCatching {
+                PackageDurationMode.valueOf(o.optString("packageDurationMode", ""))
+            }.getOrDefault(if (storedIntakes > 0) PackageDurationMode.INTAKES else PackageDurationMode.DAYS)
+            val storedDays = o.optInt("packageMaxDays", 30).coerceAtLeast(0)
+
+            return Medication(
+                id = o.getLong("id"),
+                name = o.getString("name"),
+                doseNote = o.optString("doseNote"),
+                timesPerActiveDay = o.optInt("timesPerActiveDay", 1),
+                recurrenceType = runCatching { RecurrenceType.valueOf(o.optString("recurrenceType", "DAILY")) }.getOrDefault(RecurrenceType.DAILY),
+                weekdays = o.optJSONArray("weekdays").toIntSet(),
+                everyNDays = o.optInt("everyNDays", 1).coerceAtLeast(1),
+                anchorEpochDay = o.optLong("anchorEpochDay", LocalDate.now().toEpochDay()),
+                monthlyDays = o.optJSONArray("monthlyDays").toIntSet(),
+                alarmTimes = o.optJSONArray("alarmTimes").toStringList().ifEmpty { listOf("08:00") },
+                packageDurationMode = mode,
+                packageMaxDays = if (mode == PackageDurationMode.DAYS) storedDays.coerceAtLeast(1) else 0,
+                packageMaxIntakes = if (mode == PackageDurationMode.INTAKES) storedIntakes.coerceAtLeast(1) else 0,
+                lastPackageChangeEpochDay = if (o.has("lastPackageChangeEpochDay")) o.optLong("lastPackageChangeEpochDay") else null,
+                lastPackageChangeMillis = if (o.has("lastPackageChangeMillis")) o.optLong("lastPackageChangeMillis") else null,
+                stockCount = if (o.has("stockCount") && !o.isNull("stockCount")) o.optInt("stockCount", 0).coerceAtLeast(0) else null,
+                countdownEnabled = o.optBoolean("countdownEnabled", false),
+                countdownMinutes = o.optInt("countdownMinutes", 0),
+                countdownNote = o.optString("countdownNote"),
+                snoozeMinutes = o.optInt("snoozeMinutes", 10).coerceAtLeast(1),
+                enabled = o.optBoolean("enabled", true)
+            )
+        }
     }
 }
 

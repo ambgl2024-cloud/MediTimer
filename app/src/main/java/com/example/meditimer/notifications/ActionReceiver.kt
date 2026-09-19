@@ -37,6 +37,7 @@ class ActionReceiver : BroadcastReceiver() {
                         takenAtMillis = now
                     )
                 )
+                Scheduler.scheduleNextPackageReminder(context, med)
 
                 if (med.countdownEnabled && med.countdownMinutes > 0) {
                     val countdown = ActiveCountdown(

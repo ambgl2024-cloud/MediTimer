@@ -2,6 +2,8 @@ package com.example.meditimer.data
 
 import android.content.Context
 import org.json.JSONArray
+import java.time.LocalDate
+import java.time.ZoneId
 
 class MedicationRepository(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("meditimer_data", Context.MODE_PRIVATE)
@@ -69,6 +71,21 @@ class MedicationRepository(context: Context) {
     fun isTaken(medicationId: Long, epochDay: Long, plannedTime: String): Boolean =
         getIntakes().any { it.medicationId == medicationId && it.plannedEpochDay == epochDay && it.plannedTime == plannedTime }
 
+    fun getPackageIntakesUsed(medication: Medication): Int {
+        if (medication.packageDurationMode != PackageDurationMode.INTAKES || medication.lastPackageChangeEpochDay == null) return 0
+        val startMillis = medication.lastPackageChangeMillis ?: LocalDate
+            .ofEpochDay(medication.lastPackageChangeEpochDay)
+            .atStartOfDay(ZoneId.systemDefault())
+            .toInstant()
+            .toEpochMilli()
+        return getIntakes().count { it.medicationId == medication.id && it.takenAtMillis >= startMillis }
+    }
+
+    fun getPackageIntakesRemaining(medication: Medication): Int? {
+        if (medication.packageDurationMode != PackageDurationMode.INTAKES || medication.lastPackageChangeEpochDay == null) return null
+        return medication.packageMaxIntakes - getPackageIntakesUsed(medication)
+    }
+
     private fun getCountdownsRaw(): List<ActiveCountdown> = parseArray("countdowns") { ActiveCountdown.fromJson(it) }
 
     fun getCountdowns(): List<ActiveCountdown> = getCountdownsRaw().sortedBy { it.endMillis }
@@ -129,7 +146,23 @@ class MedicationRepository(context: Context) {
     }
 
     fun clearPackageReminderState(medicationId: Long) {
-        prefs.edit().remove("package_reminder_last_$medicationId").apply()
+        prefs.edit()
+            .remove("package_reminder_last_$medicationId")
+            .remove("package_reminder_remaining_$medicationId")
+            .apply()
+    }
+
+    fun getLastPackageReminderRemaining(medicationId: Long): Int? {
+        val key = "package_reminder_remaining_$medicationId"
+        return if (prefs.contains(key)) prefs.getInt(key, Int.MIN_VALUE).takeIf { it != Int.MIN_VALUE } else null
+    }
+
+    fun markPackageReminderRemaining(medicationId: Long, remaining: Int) {
+        prefs.edit().putInt("package_reminder_remaining_$medicationId", remaining).apply()
+    }
+
+    fun clearPackageReminderRemaining(medicationId: Long) {
+        prefs.edit().remove("package_reminder_remaining_$medicationId").apply()
     }
 
     fun getLastStockReminderEpochDay(medicationId: Long): Long? {

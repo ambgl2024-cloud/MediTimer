@@ -12,6 +12,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.example.meditimer.MainActivity
 import com.example.meditimer.R
 import com.example.meditimer.data.Medication
+import com.example.meditimer.data.PackageDurationMode
 
 object NotificationHelper {
     const val CHANNEL_MED = "medication_alarm_v1"
@@ -139,7 +140,7 @@ object NotificationHelper {
     }
 
 
-    fun showPackageChangeReminder(context: Context, medication: Medication, daysRemaining: Long) {
+    fun showPackageChangeReminder(context: Context, medication: Medication, remaining: Long) {
         ensureChannels(context)
         val openIntent = PendingIntent.getActivity(
             context,
@@ -147,12 +148,22 @@ object NotificationHelper {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val body = when {
-            daysRemaining > 1 -> "Tra $daysRemaining giorni dovrai cambiare la confezione di ${medication.name}."
-            daysRemaining == 1L -> "Domani dovrai cambiare la confezione di ${medication.name}."
-            daysRemaining == 0L -> "Oggi devi cambiare la confezione di ${medication.name}."
-            daysRemaining == -1L -> "Il cambio confezione di ${medication.name} è scaduto da 1 giorno."
-            else -> "Il cambio confezione di ${medication.name} è scaduto da ${-daysRemaining} giorni."
+        val body = if (medication.packageDurationMode == PackageDurationMode.INTAKES) {
+            when {
+                remaining > 1 -> "Restano $remaining assunzioni prima di cambiare la confezione di ${medication.name}."
+                remaining == 1L -> "Resta 1 assunzione prima di cambiare la confezione di ${medication.name}."
+                remaining == 0L -> "Hai raggiunto il numero massimo di assunzioni per ${medication.name}: cambia la confezione."
+                remaining == -1L -> "Hai superato di 1 assunzione la durata della confezione di ${medication.name}."
+                else -> "Hai superato di ${-remaining} assunzioni la durata della confezione di ${medication.name}."
+            }
+        } else {
+            when {
+                remaining > 1 -> "Tra $remaining giorni dovrai cambiare la confezione di ${medication.name}."
+                remaining == 1L -> "Domani dovrai cambiare la confezione di ${medication.name}."
+                remaining == 0L -> "Oggi devi cambiare la confezione di ${medication.name}."
+                remaining == -1L -> "Il cambio confezione di ${medication.name} è scaduto da 1 giorno."
+                else -> "Il cambio confezione di ${medication.name} è scaduto da ${-remaining} giorni."
+            }
         }
         val n = NotificationCompat.Builder(context, CHANNEL_PACKAGE)
             .setSmallIcon(R.drawable.ic_notification)

@@ -168,6 +168,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
             onSave = { med ->
                 editing?.let { Scheduler.cancelMedication(context, it) }
                 repo.upsertMedication(med)
+                repo.clearPackageReminderState(med.id)
                 med.alarmTimes.forEach { Scheduler.scheduleNextForSlot(context, med, it) }
                 Scheduler.scheduleNextPackageReminder(context, med)
                 Scheduler.scheduleNextStockReminder(context, med)
@@ -191,6 +192,12 @@ private fun AboutDialog(onDismiss: () -> Unit) {
 
     val changelog = remember {
         listOf(
+            "0.6.4" to listOf(
+                "Aggiunta la durata confezione per numero di assunzioni in alternativa ai giorni.",
+                "Per ogni farmaco si può scegliere un solo criterio: giorni oppure assunzioni.",
+                "In modalità assunzioni il conteggio usa gli eventi realmente registrati come Assunto e mostra le assunzioni rimaste.",
+                "Avvisi automatici da 7 assunzioni residue in giù, oltre agli avvisi in giorni già esistenti."
+            ),
             "0.6.3" to listOf(
                 "Menu inferiore reso responsive per schermi più stretti.",
                 "Etichette Confezioni e Calendario mantenute su una sola riga con dimensionamento adattivo di testo e icone.",
@@ -325,16 +332,29 @@ private fun TodayScreen(
         }
 
         val packageAttention = meds.mapNotNull { med ->
-            val due = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)?.plusDays(med.packageMaxDays.toLong())
-            val remaining = due?.toEpochDay()?.minus(today.toEpochDay())
+            val dayRemaining = if (med.packageDurationMode == PackageDurationMode.DAYS) {
+                med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
+                    ?.plusDays(med.packageMaxDays.toLong())
+                    ?.toEpochDay()?.minus(today.toEpochDay())
+            } else null
+            val intakeRemaining = if (med.packageDurationMode == PackageDurationMode.INTAKES) repo.getPackageIntakesRemaining(med) else null
             val messages = buildList {
-                if (remaining != null && remaining <= 7L) {
+                if (dayRemaining != null && dayRemaining <= 7L) {
                     add(when {
-                        remaining > 1 -> "${med.name}: cambio confezione tra $remaining giorni"
-                        remaining == 1L -> "${med.name}: cambio confezione domani"
-                        remaining == 0L -> "${med.name}: cambio confezione oggi"
-                        remaining == -1L -> "${med.name}: cambio confezione scaduto da 1 giorno"
-                        else -> "${med.name}: cambio confezione scaduto da ${-remaining} giorni"
+                        dayRemaining > 1 -> "${med.name}: cambio confezione tra $dayRemaining giorni"
+                        dayRemaining == 1L -> "${med.name}: cambio confezione domani"
+                        dayRemaining == 0L -> "${med.name}: cambio confezione oggi"
+                        dayRemaining == -1L -> "${med.name}: cambio confezione scaduto da 1 giorno"
+                        else -> "${med.name}: cambio confezione scaduto da ${-dayRemaining} giorni"
+                    })
+                }
+                if (intakeRemaining != null && intakeRemaining <= 7) {
+                    add(when {
+                        intakeRemaining > 1 -> "${med.name}: restano $intakeRemaining assunzioni prima del cambio"
+                        intakeRemaining == 1 -> "${med.name}: resta 1 assunzione prima del cambio"
+                        intakeRemaining == 0 -> "${med.name}: numero massimo di assunzioni raggiunto — cambia confezione"
+                        intakeRemaining == -1 -> "${med.name}: durata superata di 1 assunzione"
+                        else -> "${med.name}: durata superata di ${-intakeRemaining} assunzioni"
                     })
                 }
                 when (med.stockCount) {
@@ -426,6 +446,7 @@ private fun markTaken(context: Context, repo: MedicationRepository, med: Medicat
             takenAtMillis = now
         )
     )
+    Scheduler.scheduleNextPackageReminder(context, med)
     Scheduler.cancelSnooze(context, med.id, epochDay, time)
     NotificationManagerCompat.from(context).cancel(NotificationHelper.notificationId(med.id, time))
     if (med.countdownEnabled && med.countdownMinutes > 0) {
@@ -450,6 +471,7 @@ private fun markNotTaken(context: Context, repo: MedicationRepository, med: Medi
         repo.removeCountdown(countdown.id)
     }
     repo.removeIntake(med.id, epochDay, time)
+    Scheduler.scheduleNextPackageReminder(context, med)
 }
 
 @Composable
@@ -478,7 +500,12 @@ private fun MedicationListScreen(
                     }
                     Text(med.recurrenceLabel())
                     Text("${med.timesPerActiveDay} assunzion${if (med.timesPerActiveDay == 1) "e" else "i"}/giorno · ${med.alarmTimes.joinToString(" · ")}")
-                    Text("Confezione: max ${med.packageMaxDays} giorni")
+                    Text(
+                        if (med.packageDurationMode == PackageDurationMode.DAYS)
+                            "Confezione: max ${med.packageMaxDays} giorni"
+                        else
+                            "Confezione: max ${med.packageMaxIntakes} assunzioni"
+                    )
                     Text("Scorta: ${med.stockCount?.let { "$it confezion${if (it == 1) "e" else "i"}" } ?: "da impostare"}")
                     Text("Snooze: ${med.snoozeMinutes}min")
                     if (med.countdownEnabled) Text("Countdown post-assunzione: ${med.countdownMinutes}min")
@@ -668,6 +695,7 @@ private fun CalendarScreen(
                     enabled = preview.events.isNotEmpty(),
                     onClick = {
                         val added = repo.mergeImportedIntakes(preview.events)
+                        Scheduler.scheduleAllPackageReminders(context)
                         pendingImport = null
                         importMessage = "Import completato: $added nuovi eventi aggiunti."
                         refresh()
@@ -695,6 +723,7 @@ private fun CalendarScreen(
                 Button(onClick = {
                     val events = pendingImport?.events.orEmpty()
                     repo.replaceImportedIntakes(events)
+                    Scheduler.scheduleAllPackageReminders(context)
                     confirmReplace = false
                     pendingImport = null
                     importMessage = "Storico sostituito: ${events.size} eventi caricati dal CSV."
@@ -716,6 +745,7 @@ private fun CalendarScreen(
                     repo.removeCountdown(countdown.id)
                 }
                 repo.updateIntake(updated)
+                Scheduler.scheduleAllPackageReminders(context)
                 editingEvent = null
                 refresh()
             },
@@ -725,6 +755,7 @@ private fun CalendarScreen(
                     repo.removeCountdown(countdown.id)
                 }
                 repo.deleteIntake(event.id)
+                Scheduler.scheduleAllPackageReminders(context)
                 editingEvent = null
                 refresh()
             }
@@ -1046,15 +1077,28 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
 
     val warnings = meds.flatMap { med ->
         val items = mutableListOf<String>()
-        val due = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)?.plusDays(med.packageMaxDays.toLong())
-        val remaining = due?.toEpochDay()?.minus(today.toEpochDay())
-        if (remaining != null && remaining <= 7L) {
+        val dayRemaining = if (med.packageDurationMode == PackageDurationMode.DAYS) {
+            med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
+                ?.plusDays(med.packageMaxDays.toLong())
+                ?.toEpochDay()?.minus(today.toEpochDay())
+        } else null
+        val intakeRemaining = if (med.packageDurationMode == PackageDurationMode.INTAKES) repo.getPackageIntakesRemaining(med) else null
+        if (dayRemaining != null && dayRemaining <= 7L) {
             items += when {
-                remaining > 1 -> "${med.name}: cambio tra $remaining giorni"
-                remaining == 1L -> "${med.name}: cambio domani"
-                remaining == 0L -> "${med.name}: cambio oggi"
-                remaining == -1L -> "${med.name}: cambio scaduto da 1 giorno"
-                else -> "${med.name}: cambio scaduto da ${-remaining} giorni"
+                dayRemaining > 1 -> "${med.name}: cambio tra $dayRemaining giorni"
+                dayRemaining == 1L -> "${med.name}: cambio domani"
+                dayRemaining == 0L -> "${med.name}: cambio oggi"
+                dayRemaining == -1L -> "${med.name}: cambio scaduto da 1 giorno"
+                else -> "${med.name}: cambio scaduto da ${-dayRemaining} giorni"
+            }
+        }
+        if (intakeRemaining != null && intakeRemaining <= 7) {
+            items += when {
+                intakeRemaining > 1 -> "${med.name}: restano $intakeRemaining assunzioni prima del cambio"
+                intakeRemaining == 1 -> "${med.name}: resta 1 assunzione prima del cambio"
+                intakeRemaining == 0 -> "${med.name}: numero massimo di assunzioni raggiunto — cambia confezione"
+                intakeRemaining == -1 -> "${med.name}: durata superata di 1 assunzione"
+                else -> "${med.name}: durata superata di ${-intakeRemaining} assunzioni"
             }
         }
         when (med.stockCount) {
@@ -1082,8 +1126,10 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
 
         meds.forEach { med ->
             val last = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
-            val due = last?.plusDays(med.packageMaxDays.toLong())
-            val remaining = due?.toEpochDay()?.minus(today.toEpochDay())
+            val dayRemaining = if (med.packageDurationMode == PackageDurationMode.DAYS) {
+                last?.plusDays(med.packageMaxDays.toLong())?.toEpochDay()?.minus(today.toEpochDay())
+            } else null
+            val intakeRemaining = if (med.packageDurationMode == PackageDurationMode.INTAKES) repo.getPackageIntakesRemaining(med) else null
 
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1106,18 +1152,24 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                         }
                         Surface(modifier = Modifier.weight(1f), shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
                             Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                val progressRemaining = intakeRemaining?.toLong() ?: dayRemaining
                                 Text(
                                     when {
-                                        remaining == null -> "—"
-                                        remaining >= 0L -> remaining.toString()
-                                        else -> "−${-remaining}"
+                                        progressRemaining == null -> "—"
+                                        progressRemaining >= 0L -> progressRemaining.toString()
+                                        else -> "−${-progressRemaining}"
                                     },
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = if ((remaining ?: 99L) <= 7L) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                    color = if ((progressRemaining ?: 99L) <= 7L) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    if ((remaining ?: 0L) < 0L) "Giorni oltre" else "Giorni mancanti",
+                                    when {
+                                        med.packageDurationMode == PackageDurationMode.INTAKES && (progressRemaining ?: 0L) < 0L -> "Assunzioni oltre"
+                                        med.packageDurationMode == PackageDurationMode.INTAKES -> "Assunzioni rimaste"
+                                        (progressRemaining ?: 0L) < 0L -> "Giorni oltre"
+                                        else -> "Giorni mancanti"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1270,6 +1322,8 @@ private fun registerPackageChange(
     val newStock = medication.stockCount?.let { (it - 1).coerceAtLeast(0) }
     val updated = medication.copy(
         lastPackageChangeEpochDay = date.toEpochDay(),
+        lastPackageChangeMillis = if (date == LocalDate.now()) System.currentTimeMillis() else
+            date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
         stockCount = newStock
     )
     repo.upsertMedication(updated)
@@ -1295,7 +1349,10 @@ private fun updatePackageOpeningDate(
     date: LocalDate,
     refresh: () -> Unit
 ) {
-    val updated = medication.copy(lastPackageChangeEpochDay = date.toEpochDay())
+    val updated = medication.copy(
+        lastPackageChangeEpochDay = date.toEpochDay(),
+        lastPackageChangeMillis = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    )
     repo.upsertMedication(updated)
 
     // Correzione della data registrata: la scorta non viene modificata.
@@ -1335,7 +1392,9 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
     var everyN by remember(initial) { mutableStateOf((initial?.everyNDays ?: 2).toString()) }
     var anchorDate by remember(initial) { mutableStateOf(initial?.anchorEpochDay?.let(LocalDate::ofEpochDay) ?: LocalDate.now()) }
     var monthlyDaysText by remember(initial) { mutableStateOf(initial?.monthlyDays?.sorted()?.joinToString(",") ?: "1,15") }
-    var packageDays by remember(initial) { mutableStateOf((initial?.packageMaxDays ?: 30).toString()) }
+    var packageDurationMode by remember(initial) { mutableStateOf(initial?.packageDurationMode ?: PackageDurationMode.DAYS) }
+    var packageDays by remember(initial) { mutableStateOf((initial?.packageMaxDays?.takeIf { it > 0 } ?: 30).toString()) }
+    var packageIntakes by remember(initial) { mutableStateOf((initial?.packageMaxIntakes?.takeIf { it > 0 } ?: 28).toString()) }
     var countdownEnabled by remember(initial) { mutableStateOf(initial?.countdownEnabled ?: false) }
     var countdownMinutes by remember(initial) { mutableStateOf((initial?.countdownMinutes?.takeIf { it > 0 } ?: 2).toString()) }
     var countdownNote by remember(initial) { mutableStateOf(initial?.countdownNote.orEmpty()) }
@@ -1427,11 +1486,39 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                 }
 
                 Divider()
-                OutlinedTextField(
-                    packageDays, { packageDays = it.filter(Char::isDigit) },
-                    label = { Text("Durata massima confezione dopo apertura (giorni)") },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                Text("Durata confezione in uso", fontWeight = FontWeight.Bold)
+                Text(
+                    "Scegli un solo criterio: durata in giorni oppure numero massimo di assunzioni.",
+                    style = MaterialTheme.typography.bodySmall
                 )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = packageDurationMode == PackageDurationMode.DAYS,
+                        onClick = { packageDurationMode = PackageDurationMode.DAYS },
+                        label = { Text("Giorni") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = packageDurationMode == PackageDurationMode.INTAKES,
+                        onClick = { packageDurationMode = PackageDurationMode.INTAKES },
+                        label = { Text("Assunzioni") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (packageDurationMode == PackageDurationMode.DAYS) {
+                    OutlinedTextField(
+                        packageDays, { packageDays = it.filter(Char::isDigit) },
+                        label = { Text("Durata massima dopo apertura (giorni)") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                } else {
+                    OutlinedTextField(
+                        packageIntakes, { packageIntakes = it.filter(Char::isDigit) },
+                        label = { Text("Numero massimo di assunzioni per confezione") },
+                        supportingText = { Text("Il contatore diminuisce di 1 a ogni Assunto. Se prendi più compresse per volta, inserisci il numero di assunzioni della confezione.") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                }
 
                 Divider()
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1460,7 +1547,8 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
             Button(onClick = {
                 val parsedTimes = times.take(timesCount).map { it.trim() }
                 val n = everyN.toIntOrNull() ?: 0
-                val p = packageDays.toIntOrNull() ?: 0
+                val pDays = packageDays.toIntOrNull() ?: 0
+                val pIntakes = packageIntakes.toIntOrNull() ?: 0
                 val c = countdownMinutes.toIntOrNull() ?: 0
                 val snooze = snoozeMinutes.toIntOrNull() ?: 0
                 val monthly = parseMonthlyDays(monthlyDaysText)
@@ -1471,7 +1559,8 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                     recurrence == RecurrenceType.WEEKDAYS && weekdays.isEmpty() -> "Seleziona almeno un giorno della settimana."
                     recurrence == RecurrenceType.EVERY_N_DAYS && n < 1 -> "La ricorrenza deve essere almeno ogni 1 giorno."
                     recurrence == RecurrenceType.MONTHLY_DAYS && monthly.isEmpty() -> "Inserisci almeno un giorno del mese valido (1–31)."
-                    p < 1 -> "La durata della confezione deve essere almeno 1 giorno."
+                    packageDurationMode == PackageDurationMode.DAYS && pDays < 1 -> "La durata della confezione deve essere almeno 1 giorno."
+                    packageDurationMode == PackageDurationMode.INTAKES && pIntakes < 1 -> "Il numero di assunzioni per confezione deve essere almeno 1."
                     snooze < 1 -> "Lo snooze deve essere almeno 1 minuto."
                     countdownEnabled && c < 1 -> "Il countdown deve durare almeno 1 minuto."
                     else -> null
@@ -1489,8 +1578,11 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                             anchorEpochDay = anchorDate.toEpochDay(),
                             monthlyDays = monthly,
                             alarmTimes = parsedTimes.sorted(),
-                            packageMaxDays = p,
+                            packageDurationMode = packageDurationMode,
+                            packageMaxDays = if (packageDurationMode == PackageDurationMode.DAYS) pDays else 0,
+                            packageMaxIntakes = if (packageDurationMode == PackageDurationMode.INTAKES) pIntakes else 0,
                             lastPackageChangeEpochDay = initial?.lastPackageChangeEpochDay,
+                            lastPackageChangeMillis = initial?.lastPackageChangeMillis,
                             stockCount = initial?.stockCount,
                             countdownEnabled = countdownEnabled,
                             countdownMinutes = if (countdownEnabled) c else 0,

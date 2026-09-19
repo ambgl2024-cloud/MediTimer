@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.example.meditimer.data.MedicationRepository
+import com.example.meditimer.data.PackageDurationMode
 import java.time.LocalDate
 
 class PackageReminderReceiver : BroadcastReceiver() {
@@ -16,6 +17,13 @@ class PackageReminderReceiver : BroadcastReceiver() {
         val lastChange = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
         if (!med.enabled || lastChange == null) {
             Scheduler.cancelPackageReminder(context, medId)
+            return
+        }
+
+        if (med.packageDurationMode == PackageDurationMode.INTAKES) {
+            // Any stale time-based alarm from an older configuration is converted to the
+            // intake-driven reminder logic.
+            Scheduler.scheduleNextPackageReminder(context, med)
             return
         }
 

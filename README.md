@@ -1,3 +1,13 @@
+# MediTimer v0.6.4
+
+Nuova gestione durata confezione:
+- modalità Giorni oppure Assunzioni, mutuamente esclusive;
+- farmaci esistenti mantengono automaticamente la modalità Giorni;
+- in modalità Assunzioni il consumo è calcolato dagli eventi registrati come Assunto;
+- se restano 7 assunzioni o meno vengono mostrati/gestiti gli avvisi di cambio;
+- nella sezione Confezioni il KPI centrale diventa Assunzioni rimaste;
+- cambio confezione, scorte, responsive navbar, countdown e doppio bip restano invariati.
+
 # MediTimer v0.6.3
 
 Correzioni interfaccia per schermi diversi:

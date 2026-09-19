@@ -8,6 +8,7 @@ import android.os.Build
 import com.example.meditimer.data.ActiveCountdown
 import com.example.meditimer.data.Medication
 import com.example.meditimer.data.MedicationRepository
+import com.example.meditimer.data.PackageDurationMode
 import com.example.meditimer.data.PendingSnooze
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -77,6 +78,23 @@ object Scheduler {
         }
 
         val repo = MedicationRepository(context)
+
+        if (medication.packageDurationMode == PackageDurationMode.INTAKES) {
+            // Intake-based packages are driven by actual recorded assumptions, not by the clock.
+            cancelPackageReminder(context, medication.id)
+            val remaining = repo.getPackageIntakesRemaining(medication) ?: return
+            if (remaining <= 7) {
+                if (repo.getLastPackageReminderRemaining(medication.id) != remaining) {
+                    NotificationHelper.showPackageChangeReminder(context, medication, remaining.toLong())
+                    repo.markPackageReminderRemaining(medication.id, remaining)
+                }
+            } else {
+                repo.clearPackageReminderRemaining(medication.id)
+            }
+            return
+        }
+
+        repo.clearPackageReminderRemaining(medication.id)
         val zone = ZoneId.systemDefault()
         val now = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).atZone(zone).toLocalDateTime()
         val today = now.toLocalDate()
