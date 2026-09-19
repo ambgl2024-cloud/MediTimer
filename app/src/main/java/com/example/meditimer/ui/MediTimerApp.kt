@@ -35,6 +35,7 @@ private enum class AppTab(val label: String) {
     TODAY("Oggi"), MEDS("Farmaci"), ALARMS("Sveglie"), PACKAGES("Confezioni"), CALENDAR("Calendario")
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     val context = LocalContext.current
@@ -43,6 +44,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     var revision by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<Medication?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var showInfo by remember { mutableStateOf(false) }
 
     fun refresh() { revision++ }
     val meds = remember(revision) { repo.getMedications() }
@@ -60,6 +62,16 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     val activeCountdowns = remember(clockNow, revision) { repo.getActiveCountdowns(clockNow) }
 
     Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("MediTimer", fontWeight = FontWeight.Bold) },
+                actions = {
+                    IconButton(onClick = { showInfo = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "Versione e changelog")
+                    }
+                }
+            )
+        },
         bottomBar = {
             NavigationBar {
                 AppTab.entries.forEach { item ->
@@ -113,6 +125,10 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
         }
     }
 
+    if (showInfo) {
+        AboutDialog(onDismiss = { showInfo = false })
+    }
+
     if (creating || editing != null) {
         MedicationEditorDialog(
             initial = editing,
@@ -127,6 +143,75 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
             }
         )
     }
+}
+
+@Composable
+private fun AboutDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val versionName = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
+            .getOrNull()
+            .orEmpty()
+            .ifBlank { "sconosciuta" }
+    }
+
+    val changelog = remember {
+        listOf(
+            "0.5.4" to listOf(
+                "Ripristinato il suono finale del countdown con lo stesso NotificationChannel delle versioni iniziali.",
+                "Aggiunta schermata Info con versione installata e changelog."
+            ),
+            "0.5.3" to listOf(
+                "Countdown persistente tra pagine, chiusura e riapertura dell'app.",
+                "Salvataggio sincrono dello stato e ripristino degli exact alarm."
+            ),
+            "0.5.2" to listOf(
+                "Revisione del sistema audio di fine countdown."
+            ),
+            "0.5.1" to listOf(
+                "Snooze configurabile per ogni farmaco e ripristinabile dopo riavvio."
+            ),
+            "0.5.0" to listOf(
+                "Countdown predefinito a 2 minuti.",
+                "Rimossi i bip intermedi e la richiesta di esclusione dal risparmio energetico.",
+                "Orari multipli equidistanti e selettore HH:mm."
+            ),
+            "0.4.0" to listOf(
+                "Import/export CSV dello storico e modifica degli eventi del calendario."
+            ),
+            "0.3.0" to listOf(
+                "Calendario storico delle assunzioni e modifica degli eventi."
+            ),
+            "0.2.0" to listOf(
+                "Gestione Non assunto, countdown e storico assunzioni."
+            ),
+            "0.1.0" to listOf(
+                "Prima versione MVP di MediTimer."
+            )
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Info MediTimer") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Versione installata: $versionName", fontWeight = FontWeight.Bold)
+                Divider()
+                Text("Changelog", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                changelog.forEach { (version, changes) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("v$version", fontWeight = FontWeight.Bold)
+                        changes.forEach { change -> Text("• $change", style = MaterialTheme.typography.bodyMedium) }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Chiudi") } }
+    )
 }
 
 @Composable

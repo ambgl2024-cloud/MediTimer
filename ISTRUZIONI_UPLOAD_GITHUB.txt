@@ -1,4 +1,4 @@
-MEDITIMER v0.5.3 — UPLOAD GITHUB
+MEDITIMER v0.5.4 — UPLOAD GITHUB
 
 1. Estrai tutto lo ZIP.
 2. Carica/sovrascrivi i file nel repository MediTimer.
@@ -10,16 +10,19 @@ MEDITIMER v0.5.3 — UPLOAD GITHUB
 7. Scarica l'artifact MediTimer-APK.
 8. Installa app-release.apk.
 
-Versione: 0.5.3
-VersionCode: 10
+Versione: 0.5.4
+VersionCode: 11
 
 TEST CONSIGLIATO COUNTDOWN
 - imposta countdown a 2 minuti;
 - premi Assunto;
-- verifica che compaia il countdown;
 - cambia scheda e torna a Oggi: il tempo deve continuare;
 - esci normalmente dall'app e riaprila: deve mostrare il tempo residuo corretto;
-- ripeti con schermo spento fino alla scadenza;
-- a 0 deve arrivare l'avviso con il suono allarme Android + vibrazione.
+- spegni lo schermo e attendi la scadenza;
+- a 0 deve arrivare l'avviso sul canale countdown_alarm_v1 con suono allarme Android + vibrazione.
+
+INFO / CHANGELOG
+- nell'app premi l'icona Info (i) in alto a destra;
+- viene mostrata la versione realmente installata e il changelog.
 
 NOTA: un Arresto forzato (Force stop) da Impostazioni Android blocca gli allarmi dell'app finché non viene riaperta; è un comportamento del sistema Android.
