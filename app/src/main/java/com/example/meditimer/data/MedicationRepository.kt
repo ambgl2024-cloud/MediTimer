@@ -28,6 +28,8 @@ class MedicationRepository(context: Context) {
         saveArray("medications", getMedications().filterNot { it.id == id }.map { it.toJson() })
         saveArray("countdowns", getCountdownsRaw().filterNot { it.medicationId == id }.map { it.toJson() })
         saveArray("snoozes", getPendingSnoozes().filterNot { it.medicationId == id }.map { it.toJson() })
+        clearPackageReminderState(id)
+        clearStockReminderState(id)
     }
 
     fun getIntakes(): List<IntakeEvent> = parseArray("intakes") { IntakeEvent.fromJson(it) }
@@ -114,6 +116,33 @@ class MedicationRepository(context: Context) {
                     it.plannedTime == plannedTime
             }.map { it.toJson() }
         )
+    }
+
+
+    fun getLastPackageReminderEpochDay(medicationId: Long): Long? {
+        val key = "package_reminder_last_$medicationId"
+        return if (prefs.contains(key)) prefs.getLong(key, Long.MIN_VALUE) else null
+    }
+
+    fun markPackageReminderShown(medicationId: Long, epochDay: Long) {
+        prefs.edit().putLong("package_reminder_last_$medicationId", epochDay).apply()
+    }
+
+    fun clearPackageReminderState(medicationId: Long) {
+        prefs.edit().remove("package_reminder_last_$medicationId").apply()
+    }
+
+    fun getLastStockReminderEpochDay(medicationId: Long): Long? {
+        val key = "stock_reminder_last_$medicationId"
+        return if (prefs.contains(key)) prefs.getLong(key, Long.MIN_VALUE) else null
+    }
+
+    fun markStockReminderShown(medicationId: Long, epochDay: Long) {
+        prefs.edit().putLong("stock_reminder_last_$medicationId", epochDay).apply()
+    }
+
+    fun clearStockReminderState(medicationId: Long) {
+        prefs.edit().remove("stock_reminder_last_$medicationId").apply()
     }
 
     fun mergeImportedIntakes(events: List<IntakeEvent>): Int {

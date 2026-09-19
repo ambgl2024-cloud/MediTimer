@@ -1,17 +1,14 @@
-MediTimer v0.5.5 - pulizia repository
+MediTimer v0.6.0 - pulizia repository
 
-GitHub Upload sovrascrive i file presenti nello ZIP ma NON elimina file vecchi che non sono più inclusi.
-Nel repository attuale sono rimasti tre residui legacy che puoi eliminare manualmente dopo l'upload:
+Il caricamento via browser GitHub sovrascrive i file con lo stesso percorso ma NON elimina automaticamente file vecchi non presenti nello ZIP.
 
+Se sono ancora presenti, puoi eliminare manualmente questi residui legacy:
 1. app/src/main/res/raw/countdown_tick.wav
-   - Vecchio bip intermedio. NON è più referenziato dal codice.
-
+   Vecchio bip intermedio, non più referenziato.
 2. app/src/main/java/com/example/meditimer/notifications/CountdownService.kt
-   - Vecchio servizio countdown. Nel repository attuale è già un placeholder inerte e NON è dichiarato nel Manifest.
-
+   Vecchio servizio countdown; nelle ultime versioni è un placeholder inerte e non è nel Manifest.
 3. build-apk_RELEASE_STABLE.yml
-   - Copia visibile/duplicata del workflow. GitHub Actions usa soltanto .github/workflows/build-apk.yml.
+   Copia duplicata del workflow; GitHub Actions usa .github/workflows/build-apk.yml.
 
-La loro presenza non modifica il comportamento della v0.5.5, ma eliminarli rende il repository completamente pulito.
-
-IMPORTANTE: non eliminare .github/workflows/build-apk.yml.
+La loro presenza non dovrebbe modificare il comportamento della v0.6.0, ma eliminarli rende il repository pulito.
+NON eliminare .github/workflows/build-apk.yml.

@@ -21,6 +21,7 @@ data class Medication(
     val alarmTimes: List<String> = listOf("08:00"),
     val packageMaxDays: Int = 30,
     val lastPackageChangeEpochDay: Long? = null,
+    val stockCount: Int? = null,
     val countdownEnabled: Boolean = false,
     val countdownMinutes: Int = 0,
     val countdownNote: String = "",
@@ -53,6 +54,7 @@ data class Medication(
         put("alarmTimes", JSONArray(alarmTimes))
         put("packageMaxDays", packageMaxDays)
         if (lastPackageChangeEpochDay != null) put("lastPackageChangeEpochDay", lastPackageChangeEpochDay)
+        if (stockCount != null) put("stockCount", stockCount)
         put("countdownEnabled", countdownEnabled)
         put("countdownMinutes", countdownMinutes)
         put("countdownNote", countdownNote)
@@ -74,6 +76,7 @@ data class Medication(
             alarmTimes = o.optJSONArray("alarmTimes").toStringList().ifEmpty { listOf("08:00") },
             packageMaxDays = o.optInt("packageMaxDays", 30).coerceAtLeast(1),
             lastPackageChangeEpochDay = if (o.has("lastPackageChangeEpochDay")) o.optLong("lastPackageChangeEpochDay") else null,
+            stockCount = if (o.has("stockCount") && !o.isNull("stockCount")) o.optInt("stockCount", 0).coerceAtLeast(0) else null,
             countdownEnabled = o.optBoolean("countdownEnabled", false),
             countdownMinutes = o.optInt("countdownMinutes", 0),
             countdownNote = o.optString("countdownNote"),

@@ -23,6 +23,8 @@
         <receiver android:name=".notifications.AlarmReceiver" android:exported="false" />
         <receiver android:name=".notifications.ActionReceiver" android:exported="false" />
         <receiver android:name=".notifications.CountdownReceiver" android:exported="false" />
+        <receiver android:name=".notifications.PackageReminderReceiver" android:exported="false" />
+        <receiver android:name=".notifications.StockReminderReceiver" android:exported="false" />
         <receiver android:name=".notifications.BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

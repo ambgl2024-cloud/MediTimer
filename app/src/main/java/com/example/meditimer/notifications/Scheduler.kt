@@ -9,11 +9,13 @@ import com.example.meditimer.data.ActiveCountdown
 import com.example.meditimer.data.Medication
 import com.example.meditimer.data.MedicationRepository
 import com.example.meditimer.data.PendingSnooze
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 
 object Scheduler {
+    private const val PACKAGE_REMINDER_HOUR = 9
     fun canScheduleExact(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
         return context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
@@ -22,6 +24,13 @@ object Scheduler {
     fun scheduleAll(context: Context) {
         MedicationRepository(context).getMedications().filter { it.enabled }.forEach { med ->
             med.alarmTimes.forEach { time -> scheduleNextForSlot(context, med, time) }
+        }
+    }
+
+    fun scheduleAllPackageReminders(context: Context) {
+        MedicationRepository(context).getMedications().forEach { med ->
+            scheduleNextPackageReminder(context, med)
+            scheduleNextStockReminder(context, med)
         }
     }
 
@@ -36,6 +45,8 @@ object Scheduler {
         MedicationRepository(context).getPendingSnoozesForMedication(medication.id).forEach { snooze ->
             cancelSnooze(context, snooze.medicationId, snooze.plannedEpochDay, snooze.plannedTime)
         }
+        cancelPackageReminder(context, medication.id)
+        cancelStockReminder(context, medication.id)
     }
 
     fun scheduleNextForSlot(context: Context, medication: Medication, time: String, afterMillis: Long = System.currentTimeMillis()) {
@@ -55,6 +66,72 @@ object Scheduler {
                 }
             }
             date = date.plusDays(1)
+        }
+    }
+
+
+    fun scheduleNextPackageReminder(context: Context, medication: Medication) {
+        if (!medication.enabled || medication.lastPackageChangeEpochDay == null) {
+            cancelPackageReminder(context, medication.id)
+            return
+        }
+
+        val repo = MedicationRepository(context)
+        val zone = ZoneId.systemDefault()
+        val now = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).atZone(zone).toLocalDateTime()
+        val today = now.toLocalDate()
+        val due = LocalDate.ofEpochDay(medication.lastPackageChangeEpochDay)
+            .plusDays(medication.packageMaxDays.toLong())
+        val warningStart = due.minusDays(7)
+        val lastShown = repo.getLastPackageReminderEpochDay(medication.id)
+
+        var targetDate = if (today.isBefore(warningStart)) warningStart else today
+        if (lastShown == today.toEpochDay()) targetDate = today.plusDays(1)
+
+        var candidate = LocalDateTime.of(targetDate, LocalTime.of(PACKAGE_REMINDER_HOUR, 0))
+        if (targetDate == today && !candidate.isAfter(now)) {
+            candidate = if (lastShown == today.toEpochDay()) {
+                LocalDateTime.of(today.plusDays(1), LocalTime.of(PACKAGE_REMINDER_HOUR, 0))
+            } else {
+                now.plusSeconds(3)
+            }
+        }
+
+        val pi = packageReminderPendingIntent(context, medication.id, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
+        scheduleAlarm(context, candidate.atZone(zone).toInstant().toEpochMilli(), pi)
+    }
+
+    fun cancelPackageReminder(context: Context, medicationId: Long) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        packageReminderPendingIntent(context, medicationId, PendingIntent.FLAG_NO_CREATE)?.let { pi ->
+            am.cancel(pi)
+            pi.cancel()
+        }
+    }
+
+    fun scheduleNextStockReminder(context: Context, medication: Medication) {
+        val stock = medication.stockCount
+        if (!medication.enabled || stock == null || stock > 1) {
+            cancelStockReminder(context, medication.id)
+            return
+        }
+        val repo = MedicationRepository(context)
+        val zone = ZoneId.systemDefault()
+        val now = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).atZone(zone).toLocalDateTime()
+        val today = now.toLocalDate()
+        val lastShown = repo.getLastStockReminderEpochDay(medication.id)
+        var targetDate = if (lastShown == today.toEpochDay()) today.plusDays(1) else today
+        var candidate = LocalDateTime.of(targetDate, LocalTime.of(PACKAGE_REMINDER_HOUR, 0))
+        if (targetDate == today && !candidate.isAfter(now)) candidate = now.plusSeconds(3)
+        val pi = stockReminderPendingIntent(context, medication.id, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
+        scheduleAlarm(context, candidate.atZone(zone).toInstant().toEpochMilli(), pi)
+    }
+
+    fun cancelStockReminder(context: Context, medicationId: Long) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        stockReminderPendingIntent(context, medicationId, PendingIntent.FLAG_NO_CREATE)?.let { pi ->
+            am.cancel(pi)
+            pi.cancel()
         }
     }
 
@@ -192,6 +269,40 @@ object Scheduler {
         return PendingIntent.getBroadcast(
             context,
             ("snooze:$medicationId:$plannedEpochDay:$plannedTime").hashCode(),
+            intent,
+            baseFlag or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+
+
+    private fun stockReminderPendingIntent(
+        context: Context,
+        medicationId: Long,
+        baseFlag: Int
+    ): PendingIntent? {
+        val intent = Intent(context, StockReminderReceiver::class.java).apply {
+            putExtra(StockReminderReceiver.EXTRA_MED_ID, medicationId)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            ("stock-reminder:$medicationId").hashCode(),
+            intent,
+            baseFlag or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun packageReminderPendingIntent(
+        context: Context,
+        medicationId: Long,
+        baseFlag: Int
+    ): PendingIntent? {
+        val intent = Intent(context, PackageReminderReceiver::class.java).apply {
+            putExtra(PackageReminderReceiver.EXTRA_MED_ID, medicationId)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            ("package-reminder:$medicationId").hashCode(),
             intent,
             baseFlag or PendingIntent.FLAG_IMMUTABLE
         )

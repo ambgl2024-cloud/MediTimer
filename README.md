@@ -1,3 +1,23 @@
+# MediTimer v0.6.1
+
+- Schermata Confezioni semplificata.
+- Mostra solo ultimo cambio, giorni mancanti e confezioni rimaste.
+- Nessuno storico visibile.
+- Comandi: Cambiata oggi, Imposta scorta, Acquisto, Scarto.
+- Avvisi scorte/cambio invariati.
+- Countdown, doppio bip, snooze e firma stabile invariati.
+
+# MediTimer v0.6.0
+
+Nuova gestione Confezioni e Scorte:
+- scorta per farmaco (confezioni chiuse, esclusa quella in uso);
+- cambio confezione = -1 automatico dalla scorta;
+- + Acquisto, - Scarto, Imposta scorta;
+- avvisi quotidiani dalle 09:00, a partire da 7 giorni prima del cambio;
+- avviso immediato quando la scorta scende a 1 o 0, poi promemoria quotidiano finché non viene ripristinata;
+- avvisi visibili anche nella schermata Oggi;
+- countdown e doppio bip v0.5.6 invariati.
+
 # MediTimer v0.5.6
 
 Correzione doppio bip di fine countdown:

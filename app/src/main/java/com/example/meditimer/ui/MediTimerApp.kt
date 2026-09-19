@@ -137,6 +137,8 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
                 editing?.let { Scheduler.cancelMedication(context, it) }
                 repo.upsertMedication(med)
                 med.alarmTimes.forEach { Scheduler.scheduleNextForSlot(context, med, it) }
+                Scheduler.scheduleNextPackageReminder(context, med)
+                Scheduler.scheduleNextStockReminder(context, med)
                 creating = false
                 editing = null
                 refresh()
@@ -157,6 +159,18 @@ private fun AboutDialog(onDismiss: () -> Unit) {
 
     val changelog = remember {
         listOf(
+            "0.6.1" to listOf(
+                "Semplificata la schermata Confezioni.",
+                "Per ogni farmaco vengono mostrati solo ultimo cambio, giorni mancanti e confezioni rimaste.",
+                "Mantenuti i comandi Cambiata oggi, Imposta scorta, Acquisto e Scarto.",
+                "Logica degli avvisi e gestione automatica della scorta invariati."
+            ),
+            "0.6.0" to listOf(
+                "Gestione scorte per ogni farmaco: acquisti, scarti e correzione quantità.",
+                "Ogni cambio confezione consuma automaticamente una confezione dalla scorta.",
+                "Avvisi giornalieri da 7 giorni prima del cambio confezione e avvisi giornalieri di scorta a 1 o 0 confezioni (ore 09:00).",
+                "Aggiunti avvisi scorte anche nelle schermate Oggi e Confezioni."
+            ),
             "0.5.6" to listOf(
                 "Ripristinato il doppio bip originale di fine countdown.",
                 "Aggiunto un breve pre-roll silenzioso per evitare che il primo bip venga tagliato quando Android riattiva l'audio a schermo spento.",
@@ -262,6 +276,40 @@ private fun TodayScreen(
                     Text("Allarmi precisi non abilitati", fontWeight = FontWeight.Bold)
                     Text("Android può ritardare i promemoria. Abilita gli allarmi precisi per avere orari affidabili.")
                     Button(onClick = requestExactAlarmPermission) { Text("Abilita") }
+                }
+            }
+        }
+
+        val packageAttention = meds.mapNotNull { med ->
+            val due = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)?.plusDays(med.packageMaxDays.toLong())
+            val remaining = due?.toEpochDay()?.minus(today.toEpochDay())
+            val messages = buildList {
+                if (remaining != null && remaining <= 7L) {
+                    add(when {
+                        remaining > 1 -> "${med.name}: cambio confezione tra $remaining giorni"
+                        remaining == 1L -> "${med.name}: cambio confezione domani"
+                        remaining == 0L -> "${med.name}: cambio confezione oggi"
+                        remaining == -1L -> "${med.name}: cambio confezione scaduto da 1 giorno"
+                        else -> "${med.name}: cambio confezione scaduto da ${-remaining} giorni"
+                    })
+                }
+                when (med.stockCount) {
+                    0 -> add("${med.name}: scorta esaurita")
+                    1 -> add("${med.name}: ultima confezione in scorta — pianifica l'acquisto")
+                    else -> Unit
+                }
+            }
+            messages.takeIf { it.isNotEmpty() }
+        }.flatten()
+
+        if (packageAttention.isNotEmpty()) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Warning, contentDescription = null)
+                        Text("Attenzione confezioni e scorte", fontWeight = FontWeight.Bold)
+                    }
+                    packageAttention.forEach { Text("• $it") }
                 }
             }
         }
@@ -387,6 +435,7 @@ private fun MedicationListScreen(
                     Text(med.recurrenceLabel())
                     Text("${med.timesPerActiveDay} assunzion${if (med.timesPerActiveDay == 1) "e" else "i"}/giorno · ${med.alarmTimes.joinToString(" · ")}")
                     Text("Confezione: max ${med.packageMaxDays} giorni")
+                    Text("Scorta: ${med.stockCount?.let { "$it confezion${if (it == 1) "e" else "i"}" } ?: "da impostare"}")
                     Text("Snooze: ${med.snoozeMinutes}min")
                     if (med.countdownEnabled) Text("Countdown post-assunzione: ${med.countdownMinutes}min")
                     if (!med.enabled) Text("Sospeso", color = MaterialTheme.colorScheme.error)
@@ -949,47 +998,245 @@ private fun csvCell(value: String): String {
 private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, refresh: () -> Unit) {
     val context = LocalContext.current
     val today = LocalDate.now()
+    var stockAction by remember { mutableStateOf<StockAction?>(null) }
+
+    val warnings = meds.flatMap { med ->
+        val items = mutableListOf<String>()
+        val due = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)?.plusDays(med.packageMaxDays.toLong())
+        val remaining = due?.toEpochDay()?.minus(today.toEpochDay())
+        if (remaining != null && remaining <= 7L) {
+            items += when {
+                remaining > 1 -> "${med.name}: cambio tra $remaining giorni"
+                remaining == 1L -> "${med.name}: cambio domani"
+                remaining == 0L -> "${med.name}: cambio oggi"
+                remaining == -1L -> "${med.name}: cambio scaduto da 1 giorno"
+                else -> "${med.name}: cambio scaduto da ${-remaining} giorni"
+            }
+        }
+        when (med.stockCount) {
+            null -> items += "${med.name}: imposta la scorta iniziale"
+            0 -> items += "${med.name}: scorta esaurita — acquisto necessario"
+            1 -> items += "${med.name}: ultima confezione in scorta — pianifica l'acquisto"
+        }
+        items
+    }
+
     ScreenColumn {
-        Text("Cambio confezione", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("Confezioni", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+
+        if (warnings.isNotEmpty()) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Warning, contentDescription = null)
+                        Text("Attenzioni", fontWeight = FontWeight.Bold)
+                    }
+                    warnings.forEach { Text("• $it") }
+                }
+            }
+        }
+
         meds.forEach { med ->
             val last = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
             val due = last?.plusDays(med.packageMaxDays.toLong())
             val remaining = due?.toEpochDay()?.minus(today.toEpochDay())
+
             Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(med.name, fontWeight = FontWeight.Bold)
-                    Text("Durata massima: ${med.packageMaxDays} giorni")
-                    Text("Ultimo cambio: ${last?.itDate() ?: "non impostato"}")
-                    if (due != null) {
-                        Text("Prossimo cambio: ${due.itDate()}")
-                        Text(
-                            when {
-                                remaining == null -> ""
-                                remaining > 1 -> "Mancano $remaining giorni"
-                                remaining == 1L -> "Manca 1 giorno"
-                                remaining == 0L -> "Cambio previsto oggi"
-                                else -> "Scaduta da ${-remaining} giorni"
-                            },
-                            color = if ((remaining ?: 99) <= 3) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                        )
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(med.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        when (med.stockCount) {
+                            null -> AssistChip(onClick = {}, label = { Text("Scorta da impostare") })
+                            0 -> AssistChip(onClick = {}, label = { Text("Scorta esaurita") })
+                            1 -> AssistChip(onClick = {}, label = { Text("Ultima confezione") })
+                            else -> Unit
+                        }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            repo.upsertMedication(med.copy(lastPackageChangeEpochDay = today.toEpochDay()))
-                            refresh()
-                        }) { Text("Cambiata oggi") }
-                        OutlinedButton(onClick = {
-                            showDatePicker(context, last ?: today) { selected ->
-                                repo.upsertMedication(med.copy(lastPackageChangeEpochDay = selected.toEpochDay()))
-                                refresh()
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(modifier = Modifier.weight(1f), shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
+                            Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(last?.itDate() ?: "—", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                Text("Ultimo cambio", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                        }) { Text("Imposta data") }
+                        }
+                        Surface(modifier = Modifier.weight(1f), shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
+                            Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    when {
+                                        remaining == null -> "—"
+                                        remaining >= 0L -> remaining.toString()
+                                        else -> "−${-remaining}"
+                                    },
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if ((remaining ?: 99L) <= 7L) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    if ((remaining ?: 0L) < 0L) "Giorni oltre" else "Giorni mancanti",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Surface(modifier = Modifier.weight(1f), shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
+                            Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    med.stockCount?.toString() ?: "—",
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if ((med.stockCount ?: 99) <= 1) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text("Confezioni rimaste", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                     }
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { registerPackageChange(context, repo, med, today, refresh) }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Check, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Cambiata oggi")
+                        }
+                        OutlinedButton(onClick = { stockAction = StockAction(med, StockMode.SET) }, modifier = Modifier.weight(1f)) {
+                            Text("Imposta scorta")
+                        }
+                    }
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { stockAction = StockAction(med, StockMode.ADD) }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Add, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Acquisto")
+                        }
+                        OutlinedButton(
+                            onClick = { stockAction = StockAction(med, StockMode.REMOVE) },
+                            enabled = (med.stockCount ?: 0) > 0,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Remove, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Scarto")
+                        }
+                    }
+
+                    Text(
+                        "La scorta comprende solo le confezioni chiuse; quella in uso non è conteggiata.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
         if (meds.isEmpty()) Text("Nessun farmaco configurato.")
     }
+
+    stockAction?.let { action ->
+        StockAdjustmentDialog(
+            action = action,
+            onDismiss = { stockAction = null },
+            onConfirm = { quantity ->
+                val current = action.medication.stockCount ?: 0
+                val newStock = when (action.mode) {
+                    StockMode.ADD -> current + quantity
+                    StockMode.REMOVE -> (current - quantity).coerceAtLeast(0)
+                    StockMode.SET -> quantity
+                }
+                val updated = action.medication.copy(stockCount = newStock)
+                repo.upsertMedication(updated)
+                if (newStock <= 1) {
+                    NotificationHelper.showLowStockWarning(context, updated, newStock)
+                    repo.markStockReminderShown(updated.id, LocalDate.now().toEpochDay())
+                    Scheduler.scheduleNextStockReminder(context, updated)
+                } else {
+                    NotificationHelper.cancelLowStockWarning(context, updated.id)
+                    repo.clearStockReminderState(updated.id)
+                    Scheduler.cancelStockReminder(context, updated.id)
+                }
+                stockAction = null
+                refresh()
+            }
+        )
+    }
+}
+
+private enum class StockMode { ADD, REMOVE, SET }
+private data class StockAction(val medication: Medication, val mode: StockMode)
+
+@Composable
+private fun StockAdjustmentDialog(action: StockAction, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    var quantityText by remember(action) { mutableStateOf(if (action.mode == StockMode.SET) (action.medication.stockCount ?: 0).toString() else "1") }
+    val quantity = quantityText.toIntOrNull()
+    val title = when (action.mode) {
+        StockMode.ADD -> "Registra acquisto"
+        StockMode.REMOVE -> "Riduci scorta"
+        StockMode.SET -> "Imposta scorta"
+    }
+    val label = when (action.mode) {
+        StockMode.ADD -> "Confezioni acquistate"
+        StockMode.REMOVE -> "Confezioni da eliminare/scartare"
+        StockMode.SET -> "Scorta reale attuale"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("$title · ${action.medication.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Scorta attuale: ${action.medication.stockCount?.toString() ?: "non impostata"}")
+                OutlinedTextField(
+                    value = quantityText,
+                    onValueChange = { quantityText = it.filter(Char::isDigit) },
+                    label = { Text(label) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(quantity ?: 0) },
+                enabled = quantity != null && if (action.mode == StockMode.SET) quantity >= 0 else quantity > 0
+            ) { Text("Conferma") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annulla") } }
+    )
+}
+
+private fun registerPackageChange(
+    context: Context,
+    repo: MedicationRepository,
+    medication: Medication,
+    date: LocalDate,
+    refresh: () -> Unit
+) {
+    val newStock = medication.stockCount?.let { (it - 1).coerceAtLeast(0) }
+    val updated = medication.copy(
+        lastPackageChangeEpochDay = date.toEpochDay(),
+        stockCount = newStock
+    )
+    repo.upsertMedication(updated)
+    repo.clearPackageReminderState(medication.id)
+    Scheduler.scheduleNextPackageReminder(context, updated)
+    if (newStock != null && newStock <= 1) {
+        NotificationHelper.showLowStockWarning(context, updated, newStock)
+        repo.markStockReminderShown(updated.id, LocalDate.now().toEpochDay())
+        Scheduler.scheduleNextStockReminder(context, updated)
+    } else if (newStock != null) {
+        NotificationHelper.cancelLowStockWarning(context, updated.id)
+        repo.clearStockReminderState(updated.id)
+        Scheduler.cancelStockReminder(context, updated.id)
+    }
+    refresh()
+}
+
+private fun packageRemainingLabel(remaining: Long?): String = when {
+    remaining == null -> ""
+    remaining > 1 -> "Mancano $remaining giorni"
+    remaining == 1L -> "Manca 1 giorno"
+    remaining == 0L -> "Cambio previsto oggi"
+    remaining == -1L -> "Cambio scaduto da 1 giorno"
+    else -> "Cambio scaduto da ${-remaining} giorni"
 }
 
 private fun showDatePicker(context: Context, initial: LocalDate, onSelected: (LocalDate) -> Unit) {
@@ -1169,6 +1416,7 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                             alarmTimes = parsedTimes.sorted(),
                             packageMaxDays = p,
                             lastPackageChangeEpochDay = initial?.lastPackageChangeEpochDay,
+                            stockCount = initial?.stockCount,
                             countdownEnabled = countdownEnabled,
                             countdownMinutes = if (countdownEnabled) c else 0,
                             countdownNote = if (countdownEnabled) countdownNote.trim() else "",

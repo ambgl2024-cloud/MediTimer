@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         NotificationHelper.ensureChannels(this)
         Scheduler.scheduleAll(this)
+        Scheduler.scheduleAllPackageReminders(this)
         Scheduler.restoreCountdowns(this)
         Scheduler.restoreSnoozes(this)
     }
@@ -31,6 +32,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         NotificationHelper.ensureChannels(this)
         Scheduler.scheduleAll(this)
+        Scheduler.scheduleAllPackageReminders(this)
         Scheduler.restoreCountdowns(this)
         Scheduler.restoreSnoozes(this)
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)

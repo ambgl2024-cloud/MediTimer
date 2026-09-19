@@ -1,28 +1,33 @@
-MEDITIMER v0.5.4 — UPLOAD GITHUB
+MEDITIMER v0.6.0 — UPLOAD GITHUB
 
 1. Estrai tutto lo ZIP.
-2. Carica/sovrascrivi i file nel repository MediTimer.
-3. Assicurati che .github/workflows/build-apk.yml resti presente.
-4. Il workflow deve compilare:
-   gradle :app:assembleRelease --stacktrace
-5. Fai Commit changes.
-6. Attendi GitHub Actions.
-7. Scarica l'artifact MediTimer-APK.
-8. Installa app-release.apk.
+2. Entra nella cartella estratta e carica IL CONTENUTO nella root del repository MediTimer.
+3. Sovrascrivi i file esistenti.
+4. Assicurati che .github/workflows/build-apk.yml resti presente.
+5. Il workflow deve compilare: gradle :app:assembleRelease --stacktrace
+6. Fai Commit changes e attendi GitHub Actions.
+7. Scarica l'artifact MediTimer-APK e installa app-release.apk.
 
-Versione: 0.5.4
-VersionCode: 11
+Versione: 0.6.0
+VersionCode: 14
 
-TEST CONSIGLIATO COUNTDOWN
-- imposta countdown a 2 minuti;
-- premi Assunto;
-- cambia scheda e torna a Oggi: il tempo deve continuare;
-- esci normalmente dall'app e riaprila: deve mostrare il tempo residuo corretto;
-- spegni lo schermo e attendi la scadenza;
-- a 0 deve arrivare l'avviso sul canale countdown_alarm_v1 con suono allarme Android + vibrazione.
+NUOVA GESTIONE SCORTE
+- In Confezioni, imposta la scorta reale per ciascun farmaco.
+- La scorta conta solo le confezioni chiuse di riserva; quella in uso non è inclusa.
+- Cambiata oggi / Cambio altra data: consuma automaticamente 1 confezione dalla scorta.
+- + Acquisto: aumenta la scorta della quantità inserita.
+- - Scarto: riduce la scorta per confezioni scadute/eliminate.
+- Imposta: corregge direttamente il numero reale di confezioni disponibili.
+- Correggi solo la data: modifica la data della confezione in uso senza toccare la scorta.
 
-INFO / CHANGELOG
-- nell'app premi l'icona Info (i) in alto a destra;
-- viene mostrata la versione realmente installata e il changelog.
+AVVISI
+- Cambio confezione: notifica quotidiana dalle 09:00 a partire da 7 giorni prima della scadenza, fino al cambio registrato.
+- Scorta: quando resta 1 confezione o 0, avviso immediato e poi promemoria quotidiano finché la scorta non viene ripristinata sopra 1.
+- Gli stessi avvisi sono visibili anche nelle schermate Oggi e Confezioni.
 
-NOTA: un Arresto forzato (Force stop) da Impostazioni Android blocca gli allarmi dell'app finché non viene riaperta; è un comportamento del sistema Android.
+COUNTDOWN
+- Il comportamento funzionante della v0.5.6 è invariato: countdown persistente e doppio bip finale personalizzato.
+
+NOTA
+- Per i farmaci già esistenti, la scorta appare come “da impostare”: è intenzionale per non assumere erroneamente che sia zero.
+- Un Arresto forzato (Force stop) da Impostazioni Android blocca gli allarmi dell'app finché non viene riaperta.

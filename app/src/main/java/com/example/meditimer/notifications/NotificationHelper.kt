@@ -16,11 +16,14 @@ import com.example.meditimer.data.Medication
 object NotificationHelper {
     const val CHANNEL_MED = "medication_alarm_v1"
     const val CHANNEL_COUNTDOWN = "countdown_finish_visual_v5"
+    const val CHANNEL_PACKAGE = "package_reminder_v1"
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
         val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
         val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
+        val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val notificationAttrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).build()
 
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_MED, "Promemoria farmaci", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -38,6 +41,13 @@ object NotificationHelper {
                 setSound(null, null)
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 500, 250, 500)
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_PACKAGE, "Confezioni e scorte", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Promemoria per cambio confezione e riacquisto scorte"
+                setSound(notificationUri, notificationAttrs)
+                enableVibration(true)
             }
         )
         nm.deleteNotificationChannel("countdown_alarm_v1")
@@ -127,6 +137,68 @@ object NotificationHelper {
             .build()
         runCatching { NotificationManagerCompat.from(context).notify(countdownId.hashCode(), n) }
     }
+
+
+    fun showPackageChangeReminder(context: Context, medication: Medication, daysRemaining: Long) {
+        ensureChannels(context)
+        val openIntent = PendingIntent.getActivity(
+            context,
+            ("package-open:${medication.id}").hashCode(),
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val body = when {
+            daysRemaining > 1 -> "Tra $daysRemaining giorni dovrai cambiare la confezione di ${medication.name}."
+            daysRemaining == 1L -> "Domani dovrai cambiare la confezione di ${medication.name}."
+            daysRemaining == 0L -> "Oggi devi cambiare la confezione di ${medication.name}."
+            daysRemaining == -1L -> "Il cambio confezione di ${medication.name} è scaduto da 1 giorno."
+            else -> "Il cambio confezione di ${medication.name} è scaduto da ${-daysRemaining} giorni."
+        }
+        val n = NotificationCompat.Builder(context, CHANNEL_PACKAGE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Promemoria cambio confezione")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent)
+            .build()
+        runCatching { NotificationManagerCompat.from(context).notify(packageReminderNotificationId(medication.id), n) }
+    }
+
+    fun showLowStockWarning(context: Context, medication: Medication, stockCount: Int) {
+        ensureChannels(context)
+        val openIntent = PendingIntent.getActivity(
+            context,
+            ("stock-open:${medication.id}").hashCode(),
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val body = if (stockCount <= 0) {
+            "Non hai più confezioni di ${medication.name} in scorta. Effettua un nuovo acquisto."
+        } else {
+            "Ti rimane una sola confezione di ${medication.name} in scorta. Programma un nuovo acquisto."
+        }
+        val n = NotificationCompat.Builder(context, CHANNEL_PACKAGE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(if (stockCount <= 0) "Scorta esaurita" else "Scorta quasi esaurita")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent)
+            .build()
+        runCatching { NotificationManagerCompat.from(context).notify(stockNotificationId(medication.id), n) }
+    }
+
+    fun cancelLowStockWarning(context: Context, medicationId: Long) {
+        NotificationManagerCompat.from(context).cancel(stockNotificationId(medicationId))
+    }
+
+    private fun packageReminderNotificationId(medId: Long): Int = ("package-change:$medId").hashCode()
+    private fun stockNotificationId(medId: Long): Int = ("package-stock:$medId").hashCode()
 
     fun notificationId(medId: Long, time: String): Int = ("med:$medId:$time").hashCode()
 }
