@@ -1,3 +1,13 @@
+# MediTimer v0.6.7
+
+Modifica richiesta: sola aggiunta della guida interattiva.
+- guida passo-passo al primo utilizzo su installazione senza farmaci configurati;
+- riapribile da Info → Guida;
+- spiega menu, anagrafica farmaci, ricorrenze, sveglie, snooze, Assunto/Non assunto,
+  countdown post-assunzione, gestione scorte, durata in giorni o assunzioni,
+  cambio confezione, acquisto/scarto, avvisi di scorta e Calendario/CSV;
+- nessuna funzione esistente modificata o rimossa.
+
 # MediTimer v0.6.6
 
 Gestione confezioni differenziata per singolo farmaco:

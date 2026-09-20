@@ -48,9 +48,22 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     var editing by remember { mutableStateOf<Medication?>(null) }
     var creating by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
+    var showGuide by remember { mutableStateOf(false) }
+    val guidePreferences = remember {
+        context.getSharedPreferences("meditimer_guide", Context.MODE_PRIVATE)
+    }
 
     fun refresh() { revision++ }
     val meds = remember(revision) { repo.getMedications() }
+
+    // Show the guide automatically only on a clean first use.
+    // Existing users with configured medications are not interrupted.
+    LaunchedEffect(Unit) {
+        val guideSeen = guidePreferences.getBoolean("guide_v1_seen", false)
+        if (!guideSeen && repo.getMedications().isEmpty()) {
+            showGuide = true
+        }
+    }
 
     // One app-level clock keeps countdown rendering independent from the selected tab.
     // The countdown itself is persisted in MedicationRepository; this clock only renders
@@ -158,7 +171,22 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     }
 
     if (showInfo) {
-        AboutDialog(onDismiss = { showInfo = false })
+        AboutDialog(
+            onDismiss = { showInfo = false },
+            onOpenGuide = {
+                showInfo = false
+                showGuide = true
+            }
+        )
+    }
+
+    if (showGuide) {
+        GuideDialog(
+            onFinish = {
+                guidePreferences.edit().putBoolean("guide_v1_seen", true).apply()
+                showGuide = false
+            }
+        )
     }
 
     if (creating || editing != null) {
@@ -181,7 +209,10 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
 }
 
 @Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
+private fun AboutDialog(
+    onDismiss: () -> Unit,
+    onOpenGuide: () -> Unit
+) {
     val context = LocalContext.current
     val versionName = remember {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
@@ -192,6 +223,11 @@ private fun AboutDialog(onDismiss: () -> Unit) {
 
     val changelog = remember {
         listOf(
+            "0.6.7" to listOf(
+                "Aggiunta guida interattiva passo-passo all'utilizzo di MediTimer.",
+                "La guida viene proposta automaticamente su una nuova installazione senza farmaci configurati.",
+                "La guida resta sempre accessibile dalla schermata Info."
+            ),
             "0.6.6" to listOf(
                 "Gestione Confezioni differenziata per singolo farmaco.",
                 "Per i farmaci con durata in assunzioni è possibile impostare manualmente le assunzioni rimaste della confezione in uso.",
@@ -299,7 +335,218 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Chiudi") } }
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Chiudi") } },
+        dismissButton = {
+            TextButton(onClick = onOpenGuide) {
+                Icon(Icons.Default.HelpOutline, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Guida")
+            }
+        }
+    )
+}
+
+
+private data class GuideStep(
+    val title: String,
+    val intro: String,
+    val points: List<String>,
+    val note: String? = null
+)
+
+@Composable
+private fun GuideDialog(onFinish: () -> Unit) {
+    var stepIndex by rememberSaveable { mutableIntStateOf(0) }
+
+    val steps = remember {
+        listOf(
+            GuideStep(
+                title = "Benvenuto in MediTimer",
+                intro = "MediTimer organizza assunzioni, promemoria, countdown post-assunzione e gestione delle confezioni.",
+                points = listOf(
+                    "Oggi: mostra le assunzioni previste, gli avvisi e gli eventuali countdown attivi.",
+                    "Farmaci: crea e modifica l'anagrafica dei medicinali.",
+                    "Sveglie: controlla gli orari programmati per ogni farmaco.",
+                    "Confezioni: gestisce durata della confezione, scorta e cambio scatola.",
+                    "Calendario: conserva lo storico delle assunzioni ed esporta/importa il CSV."
+                ),
+                note = "Per promemoria puntuali consenti le notifiche e, quando richiesto da Android, gli allarmi precisi."
+            ),
+            GuideStep(
+                title = "1. Crea un farmaco",
+                intro = "Apri Farmaci e premi +. Compila l'anagrafica una volta; potrai modificarla in qualsiasi momento.",
+                points = listOf(
+                    "Nome farmaco: nome con cui verrà mostrato nell'app e nelle notifiche.",
+                    "Dose / nota: campo libero, ad esempio “1 compressa” o altre indicazioni utili.",
+                    "Attivo: disattivalo se vuoi conservare il farmaco senza ricevere promemoria.",
+                    "Assunzioni nei giorni attivi: scegli quante volte deve essere assunto nella giornata.",
+                    "Gli orari vengono proposti equidistanti; tocca ogni orario per modificarlo in formato HH:mm."
+                )
+            ),
+            GuideStep(
+                title = "2. Ricorrenza e snooze",
+                intro = "Definisci quando il farmaco deve comparire nel piano e dopo quanti minuti deve ricomparire un avviso posticipato.",
+                points = listOf(
+                    "Ogni giorno: il farmaco è previsto tutti i giorni.",
+                    "Giorni della settimana: scegli i singoli giorni.",
+                    "Ogni N giorni: indica l'intervallo e la data di partenza.",
+                    "Giorni del mese: inserisci i giorni desiderati, ad esempio 1, 10, 20.",
+                    "Snooze tra gli avvisi: è il numero di minuti usato dal pulsante Rimanda nella notifica."
+                )
+            ),
+            GuideStep(
+                title = "3. Durata della confezione",
+                intro = "Per ogni farmaco scegli un solo criterio per stabilire quando la confezione in uso deve essere cambiata.",
+                points = listOf(
+                    "Giorni: indica la durata massima dopo l'apertura, ad esempio 28 giorni.",
+                    "Assunzioni: indica il numero massimo di assunzioni della confezione.",
+                    "In modalità Assunzioni il contatore diminuisce di 1 ogni volta che registri Assunto.",
+                    "Se assumi più compresse nello stesso momento, inserisci il numero di assunzioni previste dalla confezione, non necessariamente il numero fisico di compresse."
+                )
+            ),
+            GuideStep(
+                title = "4. Sveglie, notifiche e Rimanda",
+                intro = "Salvando il farmaco, gli orari vengono programmati automaticamente e sono visibili nella sezione Sveglie.",
+                points = listOf(
+                    "All'orario previsto ricevi la notifica Farmaco da assumere.",
+                    "Farmaco assunto: registra subito l'assunzione nello storico.",
+                    "Rimanda X min: chiude l'avviso e lo ripropone dopo lo snooze impostato per quel farmaco.",
+                    "Puoi usare Rimanda più volte finché non registri l'assunzione.",
+                    "La sezione Sveglie mostra gli orari e la ricorrenza attualmente associati a ciascun farmaco."
+                )
+            ),
+            GuideStep(
+                title = "5. Oggi, Assunto e countdown",
+                intro = "La sezione Oggi è il punto principale per controllare cosa devi assumere e cosa hai già registrato.",
+                points = listOf(
+                    "Premi Assunto per registrare l'assunzione. L'evento viene salvato nel Calendario.",
+                    "Se hai premuto Assunto per errore, usa Non assunto per annullare quella registrazione.",
+                    "Se il farmaco ha un countdown post-assunzione, il countdown parte automaticamente quando registri Assunto.",
+                    "Il countdown continua cambiando pagina, uscendo dall'app o spegnendo lo schermo.",
+                    "Alla fine viene emesso il doppio bip di fine countdown."
+                )
+            ),
+            GuideStep(
+                title = "6. Scorte e cambio confezione",
+                intro = "Nella sezione Confezioni la scorta indica solo le scatole chiuse disponibili; la confezione in uso non è conteggiata.",
+                points = listOf(
+                    "Cambiata oggi: registra l'apertura della nuova confezione e riduce la scorta di 1.",
+                    "Modifica data: corregge la data di apertura dell'ultima confezione senza modificare la scorta.",
+                    "Imposta scorta: imposta direttamente il numero reale di confezioni chiuse disponibili.",
+                    "Acquisto: aggiunge alla scorta il numero di confezioni acquistate.",
+                    "Scarto: sottrae confezioni eliminate, ad esempio perché scadute o inutilizzabili."
+                )
+            ),
+            GuideStep(
+                title = "7. Avvisi confezione: giorni o assunzioni",
+                intro = "La schermata Confezioni cambia automaticamente in base al criterio scelto nell'anagrafica del singolo farmaco.",
+                points = listOf(
+                    "Farmaco a giorni: mostra ultimo cambio, giorni mancanti e confezioni rimaste.",
+                    "Da 7 giorni in giù MediTimer segnala che il cambio confezione si sta avvicinando.",
+                    "Farmaco ad assunzioni: mostra le assunzioni rimaste della confezione corrente.",
+                    "Solo per i farmaci ad assunzioni compare Imposta assunzioni rimaste, utile per correggere manualmente il residuo.",
+                    "Quando resta 1 confezione in scorta viene segnalato di pianificare un nuovo acquisto; a 0 la scorta risulta esaurita."
+                )
+            ),
+            GuideStep(
+                title = "8. Calendario e backup CSV",
+                intro = "Il Calendario conserva lo storico delle assunzioni, anche se successivamente elimini un farmaco dall'anagrafica.",
+                points = listOf(
+                    "Tocca un evento per modificarne data, ora o farmaco, oppure per eliminarlo.",
+                    "Esporta CSV crea un backup dello storico.",
+                    "Importa CSV permette di ripristinare uno storico esportato in precedenza.",
+                    "L'import dello storico non crea automaticamente farmaci, sveglie o ricorrenze."
+                ),
+                note = "Puoi riaprire questa guida in qualsiasi momento da Info → Guida."
+            )
+        )
+    }
+
+    val step = steps[stepIndex]
+    val progress = (stepIndex + 1).toFloat() / steps.size.toFloat()
+
+    AlertDialog(
+        onDismissRequest = onFinish,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.fillMaxWidth(0.96f).fillMaxHeight(0.92f),
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Guida MediTimer", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    "Passo ${stepIndex + 1} di ${steps.size}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LinearProgressIndicator(
+                    progress = progress,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        text = {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(step.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(step.intro)
+
+                step.points.forEach { point ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text("•", fontWeight = FontWeight.Bold)
+                        Text(point, modifier = Modifier.weight(1f))
+                    }
+                }
+
+                step.note?.let { note ->
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Row(
+                            Modifier.padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(Icons.Default.Lightbulb, contentDescription = null)
+                            Text(note, modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (stepIndex < steps.lastIndex) {
+                        stepIndex++
+                    } else {
+                        onFinish()
+                    }
+                }
+            ) {
+                Text(if (stepIndex < steps.lastIndex) "Avanti" else "Fine")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (stepIndex > 0) {
+                    TextButton(onClick = { stepIndex-- }) {
+                        Text("Indietro")
+                    }
+                }
+                TextButton(onClick = onFinish) {
+                    Text("Salta")
+                }
+            }
+        }
     )
 }
 
