@@ -13,15 +13,39 @@ class MedicationRepository(context: Context) {
     fun getMedication(id: Long): Medication? = getMedications().firstOrNull { it.id == id }
 
     fun upsertMedication(medication: Medication) {
+        val previous = getMedication(medication.id)
         val list = getMedications().toMutableList()
         val idx = list.indexOfFirst { it.id == medication.id }
         if (idx >= 0) list[idx] = medication else list.add(medication)
         saveArray("medications", list.map { it.toJson() })
+
+        when {
+            previous == null -> appendTherapyHistory(
+                type = TherapyHistoryType.CREATED,
+                snapshot = medication,
+                previous = null
+            )
+            previous.enabled != medication.enabled -> appendTherapyHistory(
+                type = if (medication.enabled) TherapyHistoryType.ENABLED else TherapyHistoryType.DISABLED,
+                snapshot = medication,
+                previous = previous
+            )
+            !therapyRelevantEquals(previous, medication) -> appendTherapyHistory(
+                type = TherapyHistoryType.UPDATED,
+                snapshot = medication,
+                previous = previous
+            )
+        }
     }
 
     fun deleteMedication(id: Long) {
         val med = getMedication(id)
         if (med != null) {
+            appendTherapyHistory(
+                type = TherapyHistoryType.DELETED,
+                snapshot = med.copy(enabled = false),
+                previous = med
+            )
             val enriched = getIntakes().map {
                 if (it.medicationId == id && it.medicationName.isBlank()) it.copy(medicationName = med.name) else it
             }
@@ -32,6 +56,54 @@ class MedicationRepository(context: Context) {
         saveArray("snoozes", getPendingSnoozes().filterNot { it.medicationId == id }.map { it.toJson() })
         clearPackageReminderState(id)
         clearStockReminderState(id)
+    }
+
+
+    fun getTherapyHistory(): List<TherapyHistoryEntry> =
+        parseArray("therapy_history") { TherapyHistoryEntry.fromJson(it) }
+            .sortedBy { it.timestampMillis }
+
+    fun getTherapyHistory(medicationId: Long): List<TherapyHistoryEntry> =
+        getTherapyHistory().filter { it.medicationId == medicationId }
+
+    fun ensureTherapyHistoryBaselines() {
+        val existingIds = getTherapyHistory().mapTo(mutableSetOf()) { it.medicationId }
+        val now = System.currentTimeMillis()
+        getMedications().filterNot { it.id in existingIds }.forEach { medication ->
+            val inferredStart = inferredMedicationCreatedMillis(medication, now)
+                ?: getIntakes().filter { it.medicationId == medication.id }.minOfOrNull { it.takenAtMillis }
+                ?: now
+            appendTherapyHistory(
+                type = TherapyHistoryType.BASELINE,
+                snapshot = medication,
+                previous = null,
+                timestampMillis = inferredStart,
+                legacyBaseline = true
+            )
+        }
+    }
+
+    private fun appendTherapyHistory(
+        type: TherapyHistoryType,
+        snapshot: Medication,
+        previous: Medication?,
+        timestampMillis: Long = System.currentTimeMillis(),
+        legacyBaseline: Boolean = false
+    ) {
+        val list = getTherapyHistory().toMutableList()
+        val uniqueId = timestampMillis * 1000L + (list.size % 1000)
+        list.add(
+            TherapyHistoryEntry(
+                id = uniqueId,
+                medicationId = snapshot.id,
+                timestampMillis = timestampMillis,
+                type = type,
+                snapshot = snapshot,
+                previousSnapshot = previous,
+                legacyBaseline = legacyBaseline
+            )
+        )
+        saveArraySync("therapy_history", list.sortedBy { it.timestampMillis }.takeLast(5000).map { it.toJson() })
     }
 
     fun getIntakes(): List<IntakeEvent> = parseArray("intakes") { IntakeEvent.fromJson(it) }

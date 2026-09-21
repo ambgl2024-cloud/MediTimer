@@ -1,3 +1,23 @@
+# MediTimer v0.6.9
+
+Funzioni aggiunte su richiesta:
+- nuova sezione `Storia` con:
+  - Panoramica aderenza/regolarità;
+  - Timeline discorsiva dei periodi di terapia;
+  - Storia per farmaco, inclusi farmaci eliminati;
+- creazione, modifiche a orari/ricorrenza/schema, disattivazione, riattivazione ed eliminazione
+  vengono registrate automaticamente senza nuovi campi da compilare;
+- per i farmaci già esistenti la data iniziale viene ricostruita dall'ID temporale quando plausibile;
+- nessuna voce di acquisto, scarto o cambio confezione entra nella Timeline terapeutica;
+- Farmaci: filtro Tutti / Attivi / Sospesi;
+- eliminazione farmaco sempre con conferma; modifica senza conferma;
+- Calendario: filtri comprimibili per Tutto / Anno / Mese / Settimana / Giorno e per farmaco;
+- Confezioni: solo farmaci attivi;
+- KPI Confezioni uniformati con icone, valori e testi centrati e allineati.
+
+Le logiche esistenti di sveglie, snooze, countdown, doppio bip, scorte, cambio confezione,
+import/export CSV e guida non vengono modificate.
+
 # MediTimer v0.6.8
 
 Restyling grafico approvato:

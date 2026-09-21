@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
@@ -33,17 +34,20 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Calendar
+import java.util.Locale
 import kotlin.math.max
 
 private enum class AppTab(val label: String) {
-    TODAY("Oggi"), MEDS("Farmaci"), ALARMS("Sveglie"), PACKAGES("Confezioni"), CALENDAR("Calendario")
+    TODAY("Oggi"), MEDS("Farmaci"), ALARMS("Sveglie"), PACKAGES("Confezioni"), CALENDAR("Calendario"), HISTORY("Storia")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
     val context = LocalContext.current
-    val repo = remember { MedicationRepository(context) }
+    val repo = remember {
+        MedicationRepository(context).also { it.ensureTherapyHistoryBaselines() }
+    }
     var tab by remember { mutableStateOf(AppTab.TODAY) }
     var revision by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<Medication?>(null) }
@@ -92,9 +96,9 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
         bottomBar = {
             Column {
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    val compactNavigation = maxWidth < 390.dp
-                    val navIconSize = if (compactNavigation) 19.dp else 22.dp
-                    val navLabelSize = if (compactNavigation) 9.sp else 10.sp
+                    val compactNavigation = maxWidth < 430.dp
+                    val navIconSize = if (compactNavigation) 18.dp else 21.dp
+                    val navLabelSize = if (compactNavigation) 8.sp else 9.sp
 
                     NavigationBar(
                         modifier = Modifier.fillMaxWidth(),
@@ -112,6 +116,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
                                             AppTab.ALARMS -> Icons.Default.Alarm
                                             AppTab.PACKAGES -> Icons.Default.Inventory2
                                             AppTab.CALENDAR -> Icons.Default.CalendarMonth
+                                            AppTab.HISTORY -> Icons.Default.History
                                         },
                                         contentDescription = item.label,
                                         modifier = Modifier.size(navIconSize)
@@ -167,6 +172,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
                 AppTab.ALARMS -> AlarmListScreen(meds, onEdit = { editing = it })
                 AppTab.PACKAGES -> PackageScreen(meds, repo, ::refresh)
                 AppTab.CALENDAR -> CalendarScreen(repo, meds, revision, ::refresh)
+                AppTab.HISTORY -> HistoryScreen(repo, meds, revision)
             }
         }
     }
@@ -224,6 +230,14 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.6.9" to listOf(
+                "Aggiunta sezione Storia con Panoramica, Timeline discorsiva e riepilogo per farmaco.",
+                "La storia registra automaticamente creazione, modifiche di schema, disattivazione, riattivazione ed eliminazione del farmaco.",
+                "Aggiunto filtro stato Tutti / Attivi / Sospesi nella schermata Farmaci; l'eliminazione richiede sempre conferma.",
+                "Aggiunti filtri comprimibili per periodo e farmaco nel Calendario.",
+                "Confezioni mostra solo farmaci attivi; i tre KPI sono uniformati e perfettamente allineati.",
+                "Acquisti, scarti e cambi confezione non vengono inclusi nella Timeline terapeutica."
+            ),
             "0.6.8" to listOf(
                 "Restyling grafico delle schermate Farmaci, Sveglie e Confezioni.",
                 "Farmaci più compatti con indicatore grafico Attivo/Sospeso.",
@@ -788,6 +802,12 @@ private fun MedicationSearchSortBar(
     }
 }
 
+private enum class MedicationStatusFilter(val label: String) {
+    ALL("Tutti"),
+    ACTIVE("Attivi"),
+    SUSPENDED("Sospesi")
+}
+
 @Composable
 private fun MedicationListScreen(
     meds: List<Medication>,
@@ -797,12 +817,24 @@ private fun MedicationListScreen(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var sortAscending by rememberSaveable { mutableStateOf(true) }
+    var statusFilterName by rememberSaveable { mutableStateOf(MedicationStatusFilter.ALL.name) }
+    var pendingDelete by remember { mutableStateOf<Medication?>(null) }
 
-    val visibleMeds = remember(meds, query, sortAscending) {
+    val statusFilter = runCatching { MedicationStatusFilter.valueOf(statusFilterName) }
+        .getOrDefault(MedicationStatusFilter.ALL)
+
+    val visibleMeds = remember(meds, query, sortAscending, statusFilterName) {
         val filtered = meds.filter { med ->
-            query.isBlank() ||
-                med.name.contains(query, ignoreCase = true) ||
-                med.doseNote.contains(query, ignoreCase = true)
+            val statusMatches = when (statusFilter) {
+                MedicationStatusFilter.ALL -> true
+                MedicationStatusFilter.ACTIVE -> med.enabled
+                MedicationStatusFilter.SUSPENDED -> !med.enabled
+            }
+            statusMatches && (
+                query.isBlank() ||
+                    med.name.contains(query, ignoreCase = true) ||
+                    med.doseNote.contains(query, ignoreCase = true)
+                )
         }.sortedBy { it.name.lowercase() }
         if (sortAscending) filtered else filtered.reversed()
     }
@@ -825,12 +857,32 @@ private fun MedicationListScreen(
                 ascending = sortAscending,
                 onToggleSort = { sortAscending = !sortAscending }
             )
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                MedicationStatusFilter.entries.forEach { item ->
+                    FilterChip(
+                        selected = statusFilter == item,
+                        onClick = { statusFilterName = item.name },
+                        label = {
+                            Text(
+                                item.label,
+                                fontSize = 11.sp,
+                                maxLines = 1
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
         }
 
         if (meds.isEmpty()) {
             Text("Aggiungi il primo farmaco per creare il piano di assunzione.")
         } else if (visibleMeds.isEmpty()) {
-            Text("Nessun farmaco corrisponde alla ricerca.")
+            Text("Nessun farmaco corrisponde ai filtri impostati.")
         }
 
         visibleMeds.forEach { med ->
@@ -882,7 +934,7 @@ private fun MedicationListScreen(
                             Icon(Icons.Default.Edit, "Modifica", modifier = Modifier.size(18.dp))
                         }
                         IconButton(
-                            onClick = { onDelete(med) },
+                            onClick = { pendingDelete = med },
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(Icons.Default.Delete, "Elimina", modifier = Modifier.size(18.dp))
@@ -968,6 +1020,34 @@ private fun MedicationListScreen(
             }
         }
     }
+
+    pendingDelete?.let { med ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Eliminare ${med.name}?") },
+            text = {
+                Text(
+                    "Il farmaco verrà rimosso dall'anagrafica e le sue sveglie verranno annullate. " +
+                        "Lo storico delle assunzioni e della terapia resterà disponibile in Storia."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingDelete = null
+                        onDelete(med)
+                    }
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Elimina")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Annulla") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1007,6 +1087,451 @@ private fun AlarmListScreen(meds: List<Medication>, onEdit: (Medication) -> Unit
     }
 }
 
+private enum class HistorySection(val label: String) {
+    OVERVIEW("Panoramica"), TIMELINE("Timeline"), MEDICATIONS("Farmaci")
+}
+
+@Composable
+private fun HistoryScreen(
+    repo: MedicationRepository,
+    meds: List<Medication>,
+    revision: Int
+) {
+    var section by remember { mutableStateOf(HistorySection.OVERVIEW) }
+    val history = remember(revision, meds) { repo.getTherapyHistory() }
+    val intakes = remember(revision, meds) { repo.getIntakes() }
+    val periods = remember(history) { buildTherapyPeriods(history) }
+
+    ScreenColumn {
+        Text("Storia", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            HistorySection.entries.forEach { item ->
+                FilterChip(
+                    selected = section == item,
+                    onClick = { section = item },
+                    label = {
+                        Text(
+                            item.label,
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        when (section) {
+            HistorySection.OVERVIEW -> HistoryOverviewContent(meds, periods, intakes)
+            HistorySection.TIMELINE -> HistoryTimelineContent(periods, history, intakes)
+            HistorySection.MEDICATIONS -> HistoryMedicationsContent(meds, history, periods, intakes)
+        }
+
+        if (history.any { it.legacyBaseline }) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text(
+                        "Per i farmaci già presenti prima della funzione Storia, le eventuali vecchie modifiche " +
+                            "di orari o ricorrenza non possono essere recuperate. Per quel periodo la regolarità " +
+                            "è ricostruita usando la configurazione disponibile al momento dell'aggiornamento.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryOverviewContent(
+    meds: List<Medication>,
+    periods: List<TherapyPeriod>,
+    intakes: List<IntakeEvent>
+) {
+    val zone = ZoneId.systemDefault()
+    val now = System.currentTimeMillis()
+    val today = LocalDate.now()
+    val firstDate = today.minusDays(29)
+    val rangeStart = firstDate.atStartOfDay(zone).toInstant().toEpochMilli()
+    val stats = remember(periods, intakes, today) {
+        adherenceForPeriods(periods, intakes, rangeStart, now + 1, now)
+    }
+    val last14 = remember(periods, intakes, today) {
+        dailyAdherence(periods, intakes, today.minusDays(13), 14, now)
+    }
+
+    Text("Ultimi 30 giorni", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        HistoryKpiCard(
+            icon = Icons.Default.EventAvailable,
+            value = stats.expected.toString(),
+            label = "Previste",
+            modifier = Modifier.weight(1f)
+        )
+        HistoryKpiCard(
+            icon = Icons.Default.CheckCircle,
+            value = stats.taken.toString(),
+            label = "Registrate",
+            modifier = Modifier.weight(1f)
+        )
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        HistoryKpiCard(
+            icon = Icons.Default.RemoveCircleOutline,
+            value = stats.missed.toString(),
+            label = "Non registrate",
+            modifier = Modifier.weight(1f)
+        )
+        HistoryKpiCard(
+            icon = Icons.Default.Insights,
+            value = stats.percentage?.let { "$it%" } ?: "—",
+            label = "Regolarità",
+            modifier = Modifier.weight(1f)
+        )
+    }
+
+    Card {
+        Column(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Andamento ultimi 14 giorni", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    stats.percentage?.let { "$it%" } ?: "—",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().height(92.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                last14.forEach { (date, dayStats) ->
+                    val fraction = dayStats.percentage?.div(100f)?.coerceIn(0.08f, 1f) ?: 0.08f
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Bottom
+                    ) {
+                        Box(
+                            Modifier
+                                .width(12.dp)
+                                .fillMaxHeight(fraction)
+                                .background(
+                                    if (dayStats.expected > 0) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                    MaterialTheme.shapes.small
+                                )
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(date.dayOfMonth.toString(), fontSize = 8.sp, maxLines = 1)
+                    }
+                }
+            }
+            Text(
+                "La regolarità confronta le assunzioni previste dalla configurazione valida nel periodo con quelle registrate come Assunto.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    Text("Terapie attive (${meds.count { it.enabled }})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    meds.filter { it.enabled }.forEach { med ->
+        val medStats = adherenceForPeriods(periods, intakes, rangeStart, now + 1, now, med.id)
+        Card {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(Icons.Default.Medication, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f)) {
+                    Text(med.name, fontWeight = FontWeight.Bold)
+                    Text(med.scheduleDescription(), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                Text(
+                    medStats.percentage?.let { "$it%" } ?: "—",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryKpiCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    Card(modifier = modifier) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+            Column {
+                Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(label, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryTimelineContent(
+    periods: List<TherapyPeriod>,
+    history: List<TherapyHistoryEntry>,
+    intakes: List<IntakeEvent>
+) {
+    val now = System.currentTimeMillis()
+    val visible = remember(periods) { periods.sortedByDescending { it.startMillis } }
+
+    Text(
+        "La Timeline racconta i periodi di terapia: durata, schema di assunzione e regolarità. " +
+            "Non include acquisti, scarti o cambi confezione.",
+        style = MaterialTheme.typography.bodyMedium
+    )
+
+    if (visible.isEmpty()) {
+        Text("Non ci sono ancora periodi di terapia da raccontare.")
+    }
+
+    visible.forEach { period ->
+        val endExclusive = period.endMillisExclusive ?: (now + 1)
+        val stats = adherenceForPeriods(
+            periods = listOf(period),
+            intakes = intakes,
+            rangeStartMillis = period.startMillis,
+            rangeEndMillisExclusive = endExclusive,
+            nowMillis = now,
+            medicationId = period.medicationId
+        )
+        Card {
+            Column(
+                Modifier.fillMaxWidth().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(period.medicationName, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text(
+                        therapyPeriodRange(period, now),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text(
+                    therapyPeriodNarrative(period, stats, now),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+    }
+
+    val deletedCount = history.count { it.type == TherapyHistoryType.DELETED }
+    if (deletedCount > 0) {
+        Text(
+            "La storia comprende anche $deletedCount ${if (deletedCount == 1) "farmaco eliminato" else "farmaci eliminati"} dall'anagrafica.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private fun therapyPeriodRange(period: TherapyPeriod, nowMillis: Long): String {
+    val zone = ZoneId.systemDefault()
+    val start = Instant.ofEpochMilli(period.startMillis).atZone(zone).toLocalDate().itDate()
+    val endMillis = period.endMillisExclusive
+    return if (endMillis == null || endMillis > nowMillis) {
+        "$start → oggi"
+    } else {
+        val end = Instant.ofEpochMilli((endMillis - 1).coerceAtLeast(period.startMillis)).atZone(zone).toLocalDate().itDate()
+        "$start → $end"
+    }
+}
+
+private fun therapyPeriodNarrative(
+    period: TherapyPeriod,
+    stats: AdherenceStats,
+    nowMillis: Long
+): String {
+    val zone = ZoneId.systemDefault()
+    val start = Instant.ofEpochMilli(period.startMillis).atZone(zone).toLocalDate().itDate()
+    val endText = period.endMillisExclusive?.takeIf { it <= nowMillis }?.let {
+        val end = Instant.ofEpochMilli((it - 1).coerceAtLeast(period.startMillis)).atZone(zone).toLocalDate().itDate()
+        "al $end"
+    } ?: "a oggi"
+
+    if (!period.snapshot.enabled) {
+        return "Dal $start $endText ${period.medicationName} è rimasto disattivato in MediTimer; in questo intervallo non erano previste sveglie."
+    }
+
+    val opening = when (period.sourceType) {
+        TherapyHistoryType.CREATED -> "Dal $start hai iniziato a gestire ${period.medicationName}"
+        TherapyHistoryType.ENABLED -> "Dal $start hai riattivato ${period.medicationName}"
+        TherapyHistoryType.UPDATED -> "Dal $start hai seguito una nuova configurazione di ${period.medicationName}"
+        TherapyHistoryType.BASELINE -> "Dal $start risulta in uso ${period.medicationName}"
+        else -> "Dal $start hai utilizzato ${period.medicationName}"
+    }
+    val adherenceText = if (stats.expected > 0) {
+        "Nel periodo hai registrato ${stats.taken} delle ${stats.expected} assunzioni previste (${stats.percentage ?: 0}%)."
+    } else {
+        "Nel periodo non ci sono abbastanza assunzioni previste per calcolare la regolarità."
+    }
+    val ending = when (period.endType) {
+        TherapyHistoryType.UPDATED -> " Al termine del periodo hai modificato lo schema di assunzione."
+        TherapyHistoryType.DISABLED -> " Al termine del periodo il farmaco è stato disattivato."
+        TherapyHistoryType.DELETED -> " Al termine del periodo il farmaco è stato eliminato dall'anagrafica."
+        TherapyHistoryType.ENABLED -> ""
+        else -> ""
+    }
+    val legacy = if (period.legacyBaseline) " Per la parte storica precedente alla funzione Storia, lo schema è ricostruito dalla configurazione disponibile." else ""
+    return "$opening, $endText, con ${period.snapshot.scheduleDescription()}. $adherenceText$ending$legacy"
+}
+
+@Composable
+private fun HistoryMedicationsContent(
+    meds: List<Medication>,
+    history: List<TherapyHistoryEntry>,
+    periods: List<TherapyPeriod>,
+    intakes: List<IntakeEvent>
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var ascending by rememberSaveable { mutableStateOf(true) }
+    val now = System.currentTimeMillis()
+    val currentById = remember(meds) { meds.associateBy { it.id } }
+    val historyById = remember(history) { history.groupBy { it.medicationId } }
+    val intakeById = remember(intakes) { intakes.groupBy { it.medicationId } }
+    val ids = remember(meds, history, intakes) {
+        (meds.map { it.id } + history.map { it.medicationId } + intakes.map { it.medicationId }).distinct()
+    }
+
+    val summaries = remember(ids, query, ascending, meds, history, intakes) {
+        ids.mapNotNull { id ->
+            val entries = historyById[id].orEmpty().sortedBy { it.timestampMillis }
+            val current = currentById[id]
+            val latestSnapshot = current ?: entries.lastOrNull()?.previousSnapshot ?: entries.lastOrNull()?.snapshot
+            val latestIntake = intakeById[id].orEmpty().maxByOrNull { it.takenAtMillis }
+            val name = latestSnapshot?.name ?: latestIntake?.medicationName.orEmpty().ifBlank { return@mapNotNull null }
+            val start = entries.minOfOrNull { it.timestampMillis }
+                ?: intakeById[id].orEmpty().minOfOrNull { it.takenAtMillis }
+                ?: return@mapNotNull null
+            val deleted = entries.lastOrNull { it.type == TherapyHistoryType.DELETED }
+            val end = deleted?.timestampMillis
+            val status = when {
+                current == null && deleted != null -> "Eliminato"
+                current == null -> "Storico"
+                current.enabled -> "Attivo"
+                else -> "Sospeso"
+            }
+            val schedule = current ?: entries.asReversed().firstOrNull { it.type != TherapyHistoryType.DELETED }?.snapshot
+            val stats = adherenceForPeriods(
+                periods,
+                intakes,
+                start,
+                (end ?: now) + 1,
+                now,
+                id
+            )
+            MedicationHistorySummary(id, name, start, end, status, schedule, stats, intakeById[id].orEmpty().size)
+        }.filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
+            .sortedBy { it.name.lowercase() }
+            .let { if (ascending) it else it.reversed() }
+    }
+
+    MedicationSearchSortBar(
+        query = query,
+        onQueryChange = { query = it },
+        ascending = ascending,
+        onToggleSort = { ascending = !ascending }
+    )
+
+    if (summaries.isEmpty()) {
+        Text("Nessun farmaco presente nella storia.")
+    }
+
+    summaries.forEach { item ->
+        Card {
+            Column(
+                Modifier.fillMaxWidth().padding(13.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(item.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Surface(
+                        shape = MaterialTheme.shapes.extraLarge,
+                        color = when (item.status) {
+                            "Attivo" -> androidx.compose.ui.graphics.Color(0xFFE3F4E8)
+                            "Sospeso" -> MaterialTheme.colorScheme.secondaryContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    ) {
+                        Text(
+                            item.status,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Text(
+                    if (item.endMillis == null)
+                        "Dal ${millisDate(item.startMillis)} a oggi"
+                    else
+                        "Dal ${millisDate(item.startMillis)} al ${millisDate(item.endMillis)}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                item.schedule?.let {
+                    Text(it.scheduleDescription(), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                Text(
+                    if (item.stats.expected > 0)
+                        "Regolarità: ${item.stats.percentage ?: 0}% · ${item.stats.taken}/${item.stats.expected} assunzioni previste"
+                    else
+                        "Assunzioni registrate: ${item.registeredIntakes}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private data class MedicationHistorySummary(
+    val id: Long,
+    val name: String,
+    val startMillis: Long,
+    val endMillis: Long?,
+    val status: String,
+    val schedule: Medication?,
+    val stats: AdherenceStats,
+    val registeredIntakes: Int
+)
+
+private fun millisDate(millis: Long): String = Instant.ofEpochMilli(millis)
+    .atZone(ZoneId.systemDefault())
+    .toLocalDate()
+    .itDate()
+
+
 private data class HistoryImportPreview(
     val events: List<IntakeEvent>,
     val totalRows: Int,
@@ -1016,6 +1541,63 @@ private data class HistoryImportPreview(
 ) {
     val validRows: Int get() = events.size
     val newRows: Int get() = (events.size - alreadyPresentRows).coerceAtLeast(0)
+}
+
+private enum class CalendarPeriodFilter(val label: String) {
+    ALL("Tutto"),
+    YEAR("Anno"),
+    MONTH("Mese"),
+    WEEK("Settimana"),
+    DAY("Giorno")
+}
+
+private data class CalendarMedicationOption(
+    val id: Long,
+    val name: String
+)
+
+private fun calendarFilterRange(
+    mode: CalendarPeriodFilter,
+    anchor: LocalDate
+): Pair<LocalDate?, LocalDate?> = when (mode) {
+    CalendarPeriodFilter.ALL -> null to null
+    CalendarPeriodFilter.YEAR ->
+        LocalDate.of(anchor.year, 1, 1) to LocalDate.of(anchor.year, 12, 31)
+    CalendarPeriodFilter.MONTH ->
+        anchor.withDayOfMonth(1) to anchor.withDayOfMonth(anchor.lengthOfMonth())
+    CalendarPeriodFilter.WEEK -> {
+        val start = anchor.minusDays((anchor.dayOfWeek.value - 1).toLong())
+        start to start.plusDays(6)
+    }
+    CalendarPeriodFilter.DAY -> anchor to anchor
+}
+
+private fun calendarFilterRangeLabel(
+    mode: CalendarPeriodFilter,
+    anchor: LocalDate
+): String = when (mode) {
+    CalendarPeriodFilter.ALL -> "Tutto"
+    CalendarPeriodFilter.YEAR -> anchor.year.toString()
+    CalendarPeriodFilter.MONTH ->
+        anchor.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ITALIAN))
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ITALIAN) else it.toString() }
+    CalendarPeriodFilter.WEEK -> {
+        val (start, end) = calendarFilterRange(mode, anchor)
+        "${start?.itDate()} – ${end?.itDate()}"
+    }
+    CalendarPeriodFilter.DAY -> anchor.itDate()
+}
+
+private fun moveCalendarFilterAnchor(
+    mode: CalendarPeriodFilter,
+    anchor: LocalDate,
+    direction: Long
+): LocalDate = when (mode) {
+    CalendarPeriodFilter.ALL -> anchor
+    CalendarPeriodFilter.YEAR -> anchor.plusYears(direction)
+    CalendarPeriodFilter.MONTH -> anchor.plusMonths(direction)
+    CalendarPeriodFilter.WEEK -> anchor.plusWeeks(direction)
+    CalendarPeriodFilter.DAY -> anchor.plusDays(direction)
 }
 
 @Composable
@@ -1032,6 +1614,54 @@ private fun CalendarScreen(
     var pendingImport by remember { mutableStateOf<HistoryImportPreview?>(null) }
     var confirmReplace by remember { mutableStateOf(false) }
     var importMessage by remember { mutableStateOf<String?>(null) }
+
+    var filtersExpanded by rememberSaveable { mutableStateOf(false) }
+    var periodFilterName by rememberSaveable { mutableStateOf(CalendarPeriodFilter.ALL.name) }
+    var filterAnchorEpochDay by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
+    var selectedMedicationId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var periodMenuExpanded by remember { mutableStateOf(false) }
+    var medicationMenuExpanded by remember { mutableStateOf(false) }
+
+    val periodFilter = runCatching { CalendarPeriodFilter.valueOf(periodFilterName) }
+        .getOrDefault(CalendarPeriodFilter.ALL)
+    val filterAnchor = LocalDate.ofEpochDay(filterAnchorEpochDay)
+
+    val medicationOptions = remember(meds, intakes) {
+        val names = linkedMapOf<Long, String>()
+        meds.sortedBy { it.name.lowercase() }.forEach { names[it.id] = it.name }
+        intakes.sortedByDescending { it.takenAtMillis }.forEach { event ->
+            val name = event.medicationName.ifBlank { names[event.medicationId].orEmpty() }
+            if (name.isNotBlank()) names.putIfAbsent(event.medicationId, name)
+        }
+        names.map { CalendarMedicationOption(it.key, it.value) }
+            .sortedBy { it.name.lowercase() }
+    }
+
+    val selectedMedicationName = selectedMedicationId?.let { id ->
+        medicationOptions.firstOrNull { it.id == id }?.name
+            ?: medNames[id]
+            ?: "Farmaco"
+    } ?: "Tutti i farmaci"
+
+    val filteredIntakes = remember(
+        intakes,
+        periodFilterName,
+        filterAnchorEpochDay,
+        selectedMedicationId
+    ) {
+        val (rangeStart, rangeEnd) = calendarFilterRange(periodFilter, filterAnchor)
+        intakes.filter { event ->
+            val takenDate = Instant.ofEpochMilli(event.takenAtMillis)
+                .atZone(ZoneId.systemDefault())
+                .toLocalDate()
+            val periodMatches =
+                (rangeStart == null || !takenDate.isBefore(rangeStart)) &&
+                    (rangeEnd == null || !takenDate.isAfter(rangeEnd))
+            val medicationMatches =
+                selectedMedicationId == null || event.medicationId == selectedMedicationId
+            periodMatches && medicationMatches
+        }
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
@@ -1057,7 +1687,9 @@ private fun CalendarScreen(
                 parseHistoryCsv(csv, meds, intakes)
             }
             pendingImport = result.getOrNull()
-            importMessage = result.exceptionOrNull()?.let { "Import non riuscito: ${it.message ?: "CSV non valido"}" }
+            importMessage = result.exceptionOrNull()?.let {
+                "Import non riuscito: ${it.message ?: "CSV non valido"}"
+            }
         }
     }
 
@@ -1069,12 +1701,176 @@ private fun CalendarScreen(
             }
         }
 
+        Card {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.FilterAlt, contentDescription = null, modifier = Modifier.size(19.dp))
+                    Spacer(Modifier.width(7.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Filtri", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "${calendarFilterRangeLabel(periodFilter, filterAnchor)} · $selectedMedicationName",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(onClick = { filtersExpanded = !filtersExpanded }) {
+                        Icon(
+                            if (filtersExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (filtersExpanded) "Comprimi filtri" else "Espandi filtri"
+                        )
+                    }
+                }
+
+                if (filtersExpanded) {
+                    Divider()
+                    Spacer(Modifier.height(8.dp))
+
+                    Text("Periodo", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Box {
+                        OutlinedButton(
+                            onClick = { periodMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(periodFilter.label, modifier = Modifier.weight(1f))
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        }
+                        DropdownMenu(
+                            expanded = periodMenuExpanded,
+                            onDismissRequest = { periodMenuExpanded = false }
+                        ) {
+                            CalendarPeriodFilter.entries.forEach { item ->
+                                DropdownMenuItem(
+                                    text = { Text(item.label) },
+                                    onClick = {
+                                        periodFilterName = item.name
+                                        periodMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (periodFilter != CalendarPeriodFilter.ALL) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    filterAnchorEpochDay =
+                                        moveCalendarFilterAnchor(periodFilter, filterAnchor, -1).toEpochDay()
+                                }
+                            ) {
+                                Icon(Icons.Default.ChevronLeft, contentDescription = "Periodo precedente")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    showDatePicker(context, filterAnchor) {
+                                        filterAnchorEpochDay = it.toEpochDay()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    calendarFilterRangeLabel(periodFilter, filterAnchor),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    filterAnchorEpochDay =
+                                        moveCalendarFilterAnchor(periodFilter, filterAnchor, 1).toEpochDay()
+                                }
+                            ) {
+                                Icon(Icons.Default.ChevronRight, contentDescription = "Periodo successivo")
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(7.dp))
+                    Text("Farmaco", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Box {
+                        OutlinedButton(
+                            onClick = { medicationMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                selectedMedicationName,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        }
+                        DropdownMenu(
+                            expanded = medicationMenuExpanded,
+                            onDismissRequest = { medicationMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Tutti i farmaci") },
+                                onClick = {
+                                    selectedMedicationId = null
+                                    medicationMenuExpanded = false
+                                }
+                            )
+                            medicationOptions.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.name) },
+                                    onClick = {
+                                        selectedMedicationId = option.id
+                                        medicationMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (periodFilter != CalendarPeriodFilter.ALL || selectedMedicationId != null) {
+                        TextButton(
+                            onClick = {
+                                periodFilterName = CalendarPeriodFilter.ALL.name
+                                filterAnchorEpochDay = LocalDate.now().toEpochDay()
+                                selectedMedicationId = null
+                            },
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Azzera filtri")
+                        }
+                    }
+                }
+            }
+        }
+
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             OutlinedButton(
-                onClick = { importLauncher.launch(arrayOf("text/csv", "text/*", "application/csv", "application/vnd.ms-excel", "application/octet-stream")) },
+                onClick = {
+                    importLauncher.launch(
+                        arrayOf(
+                            "text/csv",
+                            "text/*",
+                            "application/csv",
+                            "application/vnd.ms-excel",
+                            "application/octet-stream"
+                        )
+                    )
+                },
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(Icons.Default.UploadFile, contentDescription = null)
@@ -1099,44 +1895,53 @@ private fun CalendarScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(it, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                    IconButton(onClick = { importMessage = null }) { Icon(Icons.Default.Close, "Chiudi") }
+                    IconButton(onClick = { importMessage = null }) {
+                        Icon(Icons.Default.Close, "Chiudi")
+                    }
                 }
             }
         }
 
         Text("Tocca un evento per modificarlo o cancellarlo.", style = MaterialTheme.typography.bodySmall)
 
-        if (intakes.isEmpty()) {
-            Text("Nessuna assunzione registrata.")
-        } else {
-            val grouped = intakes.groupBy {
-                Instant.ofEpochMilli(it.takenAtMillis).atZone(ZoneId.systemDefault()).toLocalDate()
-            }.toList().sortedByDescending { it.first }
+        when {
+            intakes.isEmpty() -> Text("Nessuna assunzione registrata.")
+            filteredIntakes.isEmpty() -> Text("Nessun evento corrisponde ai filtri impostati.")
+            else -> {
+                val grouped = filteredIntakes.groupBy {
+                    Instant.ofEpochMilli(it.takenAtMillis)
+                        .atZone(ZoneId.systemDefault())
+                        .toLocalDate()
+                }.toList().sortedByDescending { it.first }
 
-            grouped.forEach { (date, events) ->
-                Text(date.itDate(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                events.sortedBy { it.takenAtMillis }.forEach { event ->
-                    val taken = Instant.ofEpochMilli(event.takenAtMillis).atZone(ZoneId.systemDefault())
-                    val name = event.medicationName.ifBlank { medNames[event.medicationId] ?: "Farmaco eliminato" }
-                    Card(onClick = { editingEvent = event }) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Text(
-                                taken.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm")),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(name, fontWeight = FontWeight.Bold)
+                grouped.forEach { (date, events) ->
+                    Text(date.itDate(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    events.sortedBy { it.takenAtMillis }.forEach { event ->
+                        val taken = Instant.ofEpochMilli(event.takenAtMillis)
+                            .atZone(ZoneId.systemDefault())
+                        val name = event.medicationName.ifBlank {
+                            medNames[event.medicationId] ?: "Farmaco eliminato"
+                        }
+                        Card(onClick = { editingEvent = event }) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
                                 Text(
-                                    "Previsto: ${LocalDate.ofEpochDay(event.plannedEpochDay).itDate()} · ${event.plannedTime}",
-                                    style = MaterialTheme.typography.bodySmall
+                                    taken.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm")),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
                                 )
+                                Column(Modifier.weight(1f)) {
+                                    Text(name, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "Previsto: ${LocalDate.ofEpochDay(event.plannedEpochDay).itDate()} · ${event.plannedTime}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                                Icon(Icons.Default.Edit, contentDescription = "Modifica evento")
                             }
-                            Icon(Icons.Default.Edit, contentDescription = "Modifica evento")
                         }
                     }
                 }
@@ -1154,11 +1959,16 @@ private fun CalendarScreen(
                     Text("Eventi validi nel file: ${preview.validRows}")
                     Text("Nuovi rispetto allo storico: ${preview.newRows}")
                     Text("Già presenti: ${preview.alreadyPresentRows}")
-                    if (preview.duplicateRowsInFile > 0) Text("Duplicati interni al file: ${preview.duplicateRowsInFile}")
-                    if (preview.invalidRows > 0) Text("Righe non valide ignorate: ${preview.invalidRows}")
+                    if (preview.duplicateRowsInFile > 0) {
+                        Text("Duplicati interni al file: ${preview.duplicateRowsInFile}")
+                    }
+                    if (preview.invalidRows > 0) {
+                        Text("Righe non valide ignorate: ${preview.invalidRows}")
+                    }
                     Divider()
                     Text(
-                        "Aggiungi mantiene lo storico attuale e inserisce solo gli eventi mancanti. Sostituisci elimina lo storico attuale e usa il contenuto del CSV.",
+                        "Aggiungi mantiene lo storico attuale e inserisce solo gli eventi mancanti. " +
+                            "Sostituisci elimina lo storico attuale e usa il contenuto del CSV.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -1181,7 +1991,9 @@ private fun CalendarScreen(
                         enabled = preview.events.isNotEmpty(),
                         onClick = { confirmReplace = true }
                     ) { Text("Sostituisci") }
-                    TextButton(onClick = { pendingImport = null }) { Text("Annulla") }
+                    TextButton(onClick = { pendingImport = null }) {
+                        Text("Annulla")
+                    }
                 }
             }
         )
@@ -1191,29 +2003,46 @@ private fun CalendarScreen(
         AlertDialog(
             onDismissRequest = { confirmReplace = false },
             title = { Text("Sostituire tutto lo storico?") },
-            text = { Text("Lo storico presente sul telefono verrà cancellato e sostituito con gli eventi validi del CSV. Questa operazione non modifica Farmaci o Sveglie.") },
-            confirmButton = {
-                Button(onClick = {
-                    val events = pendingImport?.events.orEmpty()
-                    repo.replaceImportedIntakes(events)
-                    Scheduler.scheduleAllPackageReminders(context)
-                    confirmReplace = false
-                    pendingImport = null
-                    importMessage = "Storico sostituito: ${events.size} eventi caricati dal CSV."
-                    refresh()
-                }) { Text("Sì, sostituisci") }
+            text = {
+                Text(
+                    "Lo storico presente sul telefono verrà cancellato e sostituito con gli eventi validi del CSV. " +
+                        "Questa operazione non modifica Farmaci o Sveglie."
+                )
             },
-            dismissButton = { TextButton(onClick = { confirmReplace = false }) { Text("Annulla") } }
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val events = pendingImport?.events.orEmpty()
+                        repo.replaceImportedIntakes(events)
+                        Scheduler.scheduleAllPackageReminders(context)
+                        confirmReplace = false
+                        pendingImport = null
+                        importMessage = "Storico sostituito: ${events.size} eventi caricati dal CSV."
+                        refresh()
+                    }
+                ) { Text("Sì, sostituisci") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReplace = false }) {
+                    Text("Annulla")
+                }
+            }
         )
     }
 
     editingEvent?.let { event ->
         HistoryEventDialog(
             event = event,
-            currentMedicationName = event.medicationName.ifBlank { medNames[event.medicationId].orEmpty() },
+            currentMedicationName = event.medicationName.ifBlank {
+                medNames[event.medicationId].orEmpty()
+            },
             onDismiss = { editingEvent = null },
             onSave = { updated ->
-                repo.getCountdownsForIntake(event.medicationId, event.plannedEpochDay, event.plannedTime).forEach { countdown ->
+                repo.getCountdownsForIntake(
+                    event.medicationId,
+                    event.plannedEpochDay,
+                    event.plannedTime
+                ).forEach { countdown ->
                     Scheduler.cancelCountdown(context, countdown)
                     repo.removeCountdown(countdown.id)
                 }
@@ -1223,7 +2052,11 @@ private fun CalendarScreen(
                 refresh()
             },
             onDelete = {
-                repo.getCountdownsForIntake(event.medicationId, event.plannedEpochDay, event.plannedTime).forEach { countdown ->
+                repo.getCountdownsForIntake(
+                    event.medicationId,
+                    event.plannedEpochDay,
+                    event.plannedTime
+                ).forEach { countdown ->
                     Scheduler.cancelCountdown(context, countdown)
                     repo.removeCountdown(countdown.id)
                 }
@@ -1543,6 +2376,68 @@ private fun csvCell(value: String): String {
 }
 
 @Composable
+private fun PackageKpiCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
+    valueFontSize: androidx.compose.ui.unit.TextUnit = 20.sp
+) {
+    Surface(
+        modifier = modifier.height(112.dp),
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 1.dp
+    ) {
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 5.dp, vertical = 7.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                Modifier.fillMaxWidth().height(26.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            Box(
+                Modifier.fillMaxWidth().height(30.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    value,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = valueFontSize,
+                    color = valueColor,
+                    maxLines = 1,
+                    textAlign = TextAlign.Center
+                )
+            }
+            Box(
+                Modifier.fillMaxWidth().height(34.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    lineHeight = 12.sp,
+                    textAlign = TextAlign.Center,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, refresh: () -> Unit) {
     val context = LocalContext.current
     val today = LocalDate.now()
@@ -1551,8 +2446,10 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
     var query by rememberSaveable { mutableStateOf("") }
     var sortAscending by rememberSaveable { mutableStateOf(true) }
 
-    val visibleMeds = remember(meds, query, sortAscending) {
-        val filtered = meds.filter { med ->
+    val activeMeds = remember(meds) { meds.filter { it.enabled } }
+
+    val visibleMeds = remember(activeMeds, query, sortAscending) {
+        val filtered = activeMeds.filter { med ->
             query.isBlank() ||
                 med.name.contains(query, ignoreCase = true) ||
                 med.doseNote.contains(query, ignoreCase = true)
@@ -1560,7 +2457,7 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
         if (sortAscending) filtered else filtered.reversed()
     }
 
-    val warnings = meds.flatMap { med ->
+    val warnings = activeMeds.flatMap { med ->
         val items = mutableListOf<String>()
         val dayRemaining = if (med.packageDurationMode == PackageDurationMode.DAYS) {
             med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
@@ -1597,7 +2494,7 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
     ScreenColumn {
         Text("Confezioni", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
 
-        if (meds.isNotEmpty()) {
+        if (activeMeds.isNotEmpty()) {
             MedicationSearchSortBar(
                 query = query,
                 onQueryChange = { query = it },
@@ -1637,81 +2534,48 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                         }
                     }
 
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Surface(
-                            modifier = Modifier.weight(1f).height(104.dp),
-                            shape = MaterialTheme.shapes.medium,
-                            tonalElevation = 1.dp
-                        ) {
-                            Column(
-                                Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                Spacer(Modifier.height(5.dp))
-                                Text(last?.itDate() ?: "—", fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1)
-                                Text("Ultimo cambio", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                            }
-                        }
-                        Surface(
-                            modifier = Modifier.weight(1f).height(104.dp),
-                            shape = MaterialTheme.shapes.medium,
-                            tonalElevation = 1.dp
-                        ) {
-                            Column(
-                                Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                val progressRemaining = intakeRemaining?.toLong() ?: dayRemaining
-                                Icon(Icons.Default.HourglassBottom, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                Spacer(Modifier.height(5.dp))
-                                Text(
-                                    when {
-                                        progressRemaining == null -> "—"
-                                        progressRemaining >= 0L -> progressRemaining.toString()
-                                        else -> "−${-progressRemaining}"
-                                    },
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 20.sp,
-                                    color = if ((progressRemaining ?: 99L) <= 7L) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    when {
-                                        med.packageDurationMode == PackageDurationMode.INTAKES && (progressRemaining ?: 0L) < 0L -> "Assunzioni oltre"
-                                        med.packageDurationMode == PackageDurationMode.INTAKES -> "Assunzioni rimaste"
-                                        (progressRemaining ?: 0L) < 0L -> "Giorni oltre"
-                                        else -> "Giorni mancanti"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                        Surface(
-                            modifier = Modifier.weight(1f).height(104.dp),
-                            shape = MaterialTheme.shapes.medium,
-                            tonalElevation = 1.dp
-                        ) {
-                            Column(
-                                Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                Spacer(Modifier.height(5.dp))
-                                Text(
-                                    med.stockCount?.toString() ?: "—",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 20.sp,
-                                    color = if ((med.stockCount ?: 99) <= 1) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text("Confezioni rimaste", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
-                            }
-                        }
+                    val progressRemaining = intakeRemaining?.toLong() ?: dayRemaining
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PackageKpiCard(
+                            icon = Icons.Default.CalendarMonth,
+                            value = last?.itDate() ?: "—",
+                            label = "Ultimo cambio",
+                            modifier = Modifier.weight(1f),
+                            valueFontSize = 14.sp
+                        )
+                        PackageKpiCard(
+                            icon = Icons.Default.HourglassBottom,
+                            value = when {
+                                progressRemaining == null -> "—"
+                                progressRemaining >= 0L -> progressRemaining.toString()
+                                else -> "−${-progressRemaining}"
+                            },
+                            label = when {
+                                med.packageDurationMode == PackageDurationMode.INTAKES &&
+                                    (progressRemaining ?: 0L) < 0L -> "Assunzioni oltre"
+                                med.packageDurationMode == PackageDurationMode.INTAKES -> "Assunzioni rimaste"
+                                (progressRemaining ?: 0L) < 0L -> "Giorni oltre"
+                                else -> "Giorni mancanti"
+                            },
+                            modifier = Modifier.weight(1f),
+                            valueColor = if ((progressRemaining ?: 99L) <= 7L)
+                                MaterialTheme.colorScheme.error
+                            else
+                                MaterialTheme.colorScheme.onSurface
+                        )
+                        PackageKpiCard(
+                            icon = Icons.Default.Inventory2,
+                            value = med.stockCount?.toString() ?: "—",
+                            label = "Confezioni rimaste",
+                            modifier = Modifier.weight(1f),
+                            valueColor = if ((med.stockCount ?: 99) <= 1)
+                                MaterialTheme.colorScheme.error
+                            else
+                                MaterialTheme.colorScheme.onSurface
+                        )
                     }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1808,8 +2672,10 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
         }
         if (meds.isEmpty()) {
             Text("Nessun farmaco configurato.")
+        } else if (activeMeds.isEmpty()) {
+            Text("Nessun farmaco attivo.")
         } else if (visibleMeds.isEmpty()) {
-            Text("Nessun farmaco corrisponde alla ricerca.")
+            Text("Nessun farmaco attivo corrisponde alla ricerca.")
         }
     }
 
