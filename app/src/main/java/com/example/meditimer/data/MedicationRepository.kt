@@ -59,6 +59,175 @@ class MedicationRepository(context: Context) {
     }
 
 
+
+    fun mergeHistoricalMedication(sourceMedicationId: Long, targetMedicationId: Long): Boolean {
+        if (sourceMedicationId == targetMedicationId) return false
+
+        // The destination must be a medication that still exists.
+        // The source is intentionally restricted to a historical/deleted ID so that
+        // this correction cannot silently overwrite another active medication.
+        val target = getMedication(targetMedicationId) ?: return false
+        if (getMedication(sourceMedicationId) != null) return false
+
+        val allIntakes = getIntakes()
+        val sourceIntakes = allIntakes.filter { it.medicationId == sourceMedicationId }
+        val targetIntakes = allIntakes.filter { it.medicationId == targetMedicationId }
+
+        // Keep the target event if the same planned dose exists on both IDs.
+        // This avoids creating duplicate "Assunto" events after the merge.
+        val mergedTargetIntakes = LinkedHashMap<String, IntakeEvent>()
+        targetIntakes.sortedBy { it.takenAtMillis }.forEach { event ->
+            val normalized = event.copy(
+                medicationId = targetMedicationId,
+                medicationName = target.name
+            )
+            mergedTargetIntakes[normalized.key] = normalized
+        }
+        sourceIntakes.sortedBy { it.takenAtMillis }.forEach { event ->
+            val normalized = event.copy(
+                medicationId = targetMedicationId,
+                medicationName = target.name
+            )
+            mergedTargetIntakes.putIfAbsent(normalized.key, normalized)
+        }
+
+        val untouchedIntakes = allIntakes.filter {
+            it.medicationId != sourceMedicationId && it.medicationId != targetMedicationId
+        }
+        val mergedIntakes = (untouchedIntakes + mergedTargetIntakes.values)
+            .sortedByDescending { it.takenAtMillis }
+            .take(5000)
+        saveArraySync("intakes", mergedIntakes.map { it.toJson() })
+
+        val allHistory = getTherapyHistory()
+        val sourceHistory = allHistory
+            .filter { it.medicationId == sourceMedicationId }
+            .sortedBy { it.timestampMillis }
+        val targetHistory = allHistory
+            .filter { it.medicationId == targetMedicationId }
+            .sortedBy { it.timestampMillis }
+        val untouchedHistory = allHistory.filter {
+            it.medicationId != sourceMedicationId && it.medicationId != targetMedicationId
+        }
+
+        fun normalizeMedication(medication: Medication?): Medication? =
+            medication?.copy(id = targetMedicationId, name = target.name)
+
+        fun normalizeEntry(entry: TherapyHistoryEntry): TherapyHistoryEntry =
+            entry.copy(
+                medicationId = targetMedicationId,
+                snapshot = normalizeMedication(entry.snapshot)!!,
+                previousSnapshot = normalizeMedication(entry.previousSnapshot)
+            )
+
+        // "Deleted" on the old ID and "Created/Baseline" on the recreated ID are
+        // technical artifacts of the accidental delete/recreate operation.
+        val sourceWithoutDelete = sourceHistory
+            .filterNot { it.type == TherapyHistoryType.DELETED }
+            .map(::normalizeEntry)
+            .toMutableList()
+
+        val sourceLastKnownSnapshot = sourceHistory
+            .asReversed()
+            .firstNotNullOfOrNull { entry ->
+                when {
+                    entry.type != TherapyHistoryType.DELETED -> normalizeMedication(entry.snapshot)
+                    entry.previousSnapshot != null -> normalizeMedication(entry.previousSnapshot)
+                    else -> null
+                }
+            }
+
+        val earliestSourceIntake = sourceIntakes.minOfOrNull { it.takenAtMillis }
+        val earliestSourceHistory = sourceWithoutDelete.minOfOrNull { it.timestampMillis }
+        val earliestSourceEvidence = listOfNotNull(earliestSourceIntake, earliestSourceHistory).minOrNull()
+
+        val normalizedTargetHistory = targetHistory.map(::normalizeEntry).toMutableList()
+        val firstTargetEntry = normalizedTargetHistory.firstOrNull()
+
+        // If the old ID only survives in the intake history (typical for a medication
+        // deleted before the Storia feature existed), create a legacy baseline so the
+        // unified story begins from the old recorded period instead of the recreation date.
+        if (
+            earliestSourceEvidence != null &&
+            (sourceWithoutDelete.isEmpty() ||
+                earliestSourceEvidence < (sourceWithoutDelete.minOfOrNull { it.timestampMillis } ?: Long.MAX_VALUE))
+        ) {
+            val snapshot = sourceLastKnownSnapshot
+                ?: firstTargetEntry?.snapshot
+                ?: target
+            val existingIds = allHistory.mapTo(mutableSetOf()) { it.id }
+            var syntheticId = earliestSourceEvidence * 1000L + 997L
+            while (syntheticId in existingIds) syntheticId++
+
+            sourceWithoutDelete.add(
+                0,
+                TherapyHistoryEntry(
+                    id = syntheticId,
+                    medicationId = targetMedicationId,
+                    timestampMillis = earliestSourceEvidence,
+                    type = TherapyHistoryType.BASELINE,
+                    snapshot = normalizeMedication(snapshot)!!,
+                    previousSnapshot = null,
+                    legacyBaseline = true
+                )
+            )
+        }
+
+        val lastSourceSnapshot = sourceWithoutDelete
+            .maxByOrNull { it.timestampMillis }
+            ?.snapshot
+            ?: sourceLastKnownSnapshot
+
+        val targetAfterOrigin = normalizedTargetHistory.toMutableList()
+        if (earliestSourceEvidence != null && firstTargetEntry != null) {
+            // The recreation entry must not appear as a second medication start.
+            // If the recreated configuration differs, preserve that moment as a normal
+            // schema/status change; otherwise remove the artificial boundary entirely.
+            targetAfterOrigin.removeAt(0)
+
+            val previous = lastSourceSnapshot
+            if (previous != null) {
+                val replacementType = when {
+                    previous.enabled != firstTargetEntry.snapshot.enabled ->
+                        if (firstTargetEntry.snapshot.enabled) TherapyHistoryType.ENABLED
+                        else TherapyHistoryType.DISABLED
+                    !therapyRelevantEquals(previous, firstTargetEntry.snapshot) ->
+                        TherapyHistoryType.UPDATED
+                    else -> null
+                }
+
+                if (replacementType != null) {
+                    targetAfterOrigin.add(
+                        0,
+                        firstTargetEntry.copy(
+                            type = replacementType,
+                            previousSnapshot = previous,
+                            legacyBaseline = false
+                        )
+                    )
+                }
+            } else {
+                targetAfterOrigin.add(0, firstTargetEntry)
+            }
+        }
+
+        val mergedMedicationHistory = (sourceWithoutDelete + targetAfterOrigin)
+            .sortedWith(compareBy<TherapyHistoryEntry> { it.timestampMillis }.thenBy { it.id })
+
+        val mergedHistory = (untouchedHistory + mergedMedicationHistory)
+            .sortedWith(compareBy<TherapyHistoryEntry> { it.timestampMillis }.thenBy { it.id })
+            .takeLast(5000)
+
+        saveArraySync("therapy_history", mergedHistory.map { it.toJson() })
+
+        // No alarms, stock, package state, snoozes or countdown settings are copied:
+        // the current target medication remains exactly as configured by the user.
+        clearPackageReminderState(sourceMedicationId)
+        clearStockReminderState(sourceMedicationId)
+
+        return true
+    }
+
     fun getTherapyHistory(): List<TherapyHistoryEntry> =
         parseArray("therapy_history") { TherapyHistoryEntry.fromJson(it) }
             .sortedBy { it.timestampMillis }

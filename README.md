@@ -1,3 +1,20 @@
+# MediTimer v0.7.0
+
+Modifica richiesta: correzione manuale dei farmaci duplicati nella Storia.
+
+- In `Storia → Farmaci`, i farmaci storici/eliminati mostrano `Unisci con farmaco attuale`.
+- L'utente sceglie il farmaco attuale di destinazione e conferma l'operazione.
+- Le vecchie assunzioni vengono riassegnate al farmaco attuale.
+- La cronologia terapeutica viene unificata.
+- Il passaggio accidentale `eliminato → ricreato` non viene più mostrato come interruzione della terapia.
+- Se la configurazione del farmaco ricreato era realmente diversa, quella differenza viene conservata come modifica dello schema.
+- Le impostazioni attuali del farmaco di destinazione NON vengono sovrascritte:
+  sveglie, ricorrenza, scorte, confezione, countdown e snooze restano invariati.
+- L'unione è disponibile solo da un record storico/eliminato verso un farmaco che esiste ancora.
+- Conferma esplicita obbligatoria prima dell'unione.
+
+Nessun'altra funzione dell'app è stata modificata.
+
 # MediTimer v0.6.9
 
 Funzioni aggiunte su richiesta:

@@ -172,7 +172,7 @@ fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
                 AppTab.ALARMS -> AlarmListScreen(meds, onEdit = { editing = it })
                 AppTab.PACKAGES -> PackageScreen(meds, repo, ::refresh)
                 AppTab.CALENDAR -> CalendarScreen(repo, meds, revision, ::refresh)
-                AppTab.HISTORY -> HistoryScreen(repo, meds, revision)
+                AppTab.HISTORY -> HistoryScreen(repo, meds, revision, ::refresh)
             }
         }
     }
@@ -230,6 +230,13 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.7.0" to listOf(
+                "Aggiunta in Storia → Farmaci la funzione manuale Unisci farmaci.",
+                "Permette di unire un vecchio farmaco storico/eliminato con il farmaco attuale corrispondente.",
+                "Le vecchie assunzioni e la cronologia vengono trasferite al farmaco attuale e il falso passaggio eliminato → ricreato viene rimosso.",
+                "Le impostazioni correnti, le sveglie, le scorte, la confezione e il countdown del farmaco attuale non vengono modificati.",
+                "L'unione richiede sempre conferma esplicita."
+            ),
             "0.6.9" to listOf(
                 "Aggiunta sezione Storia con Panoramica, Timeline discorsiva e riepilogo per farmaco.",
                 "La storia registra automaticamente creazione, modifiche di schema, disattivazione, riattivazione ed eliminazione del farmaco.",
@@ -1095,7 +1102,8 @@ private enum class HistorySection(val label: String) {
 private fun HistoryScreen(
     repo: MedicationRepository,
     meds: List<Medication>,
-    revision: Int
+    revision: Int,
+    refresh: () -> Unit
 ) {
     var section by remember { mutableStateOf(HistorySection.OVERVIEW) }
     val history = remember(revision, meds) { repo.getTherapyHistory() }
@@ -1128,7 +1136,14 @@ private fun HistoryScreen(
         when (section) {
             HistorySection.OVERVIEW -> HistoryOverviewContent(meds, periods, intakes)
             HistorySection.TIMELINE -> HistoryTimelineContent(periods, history, intakes)
-            HistorySection.MEDICATIONS -> HistoryMedicationsContent(meds, history, periods, intakes)
+            HistorySection.MEDICATIONS -> HistoryMedicationsContent(
+                meds = meds,
+                history = history,
+                periods = periods,
+                intakes = intakes,
+                repo = repo,
+                onMerged = refresh
+            )
         }
 
         if (history.any { it.legacyBaseline }) {
@@ -1412,10 +1427,13 @@ private fun HistoryMedicationsContent(
     meds: List<Medication>,
     history: List<TherapyHistoryEntry>,
     periods: List<TherapyPeriod>,
-    intakes: List<IntakeEvent>
+    intakes: List<IntakeEvent>,
+    repo: MedicationRepository,
+    onMerged: () -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var ascending by rememberSaveable { mutableStateOf(true) }
+    var mergeSource by remember { mutableStateOf<MedicationHistorySummary?>(null) }
     val now = System.currentTimeMillis()
     val currentById = remember(meds) { meds.associateBy { it.id } }
     val historyById = remember(history) { history.groupBy { it.medicationId } }
@@ -1510,9 +1528,149 @@ private fun HistoryMedicationsContent(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                if (item.id !in currentById && meds.isNotEmpty()) {
+                    TextButton(
+                        onClick = { mergeSource = item },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("Unisci con farmaco attuale")
+                    }
+                }
             }
         }
     }
+
+    mergeSource?.let { source ->
+        MedicationMergeDialog(
+            source = source,
+            currentMedications = meds,
+            onDismiss = { mergeSource = null },
+            onConfirm = { target ->
+                val merged = repo.mergeHistoricalMedication(
+                    sourceMedicationId = source.id,
+                    targetMedicationId = target.id
+                )
+                if (merged) {
+                    mergeSource = null
+                    onMerged()
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun MedicationMergeDialog(
+    source: MedicationHistorySummary,
+    currentMedications: List<Medication>,
+    onDismiss: () -> Unit,
+    onConfirm: (Medication) -> Unit
+) {
+    val sortedTargets = remember(currentMedications) {
+        currentMedications.sortedBy { it.name.lowercase() }
+    }
+    var targetId by remember(source.id, currentMedications) {
+        mutableStateOf(
+            sortedTargets.firstOrNull { it.name.equals(source.name, ignoreCase = true) }?.id
+                ?: sortedTargets.firstOrNull()?.id
+        )
+    }
+    var targetMenuExpanded by remember { mutableStateOf(false) }
+    val target = sortedTargets.firstOrNull { it.id == targetId }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Unisci farmaci") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Stai correggendo un farmaco duplicato nella Storia. " +
+                        "Le impostazioni del farmaco attuale non verranno modificate."
+                )
+
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text("Storico da unire", style = MaterialTheme.typography.labelMedium)
+                        Text(source.name, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Dal ${millisDate(source.startMillis)}" +
+                                (source.endMillis?.let { " al ${millisDate(it)}" } ?: ""),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Text("Unisci nel farmaco attuale:", fontWeight = FontWeight.Bold)
+
+                Box {
+                    OutlinedButton(
+                        onClick = { targetMenuExpanded = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            target?.name ?: "Seleziona farmaco",
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    }
+                    DropdownMenu(
+                        expanded = targetMenuExpanded,
+                        onDismissRequest = { targetMenuExpanded = false }
+                    ) {
+                        sortedTargets.forEach { medication ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(medication.name)
+                                        Text(
+                                            if (medication.enabled) "Attivo" else "Sospeso",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    targetId = medication.id
+                                    targetMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    "Verranno unificate le vecchie assunzioni e la cronologia terapeutica. " +
+                        "Il falso passaggio eliminato → ricreato verrà rimosso dalla Storia. " +
+                        "Sveglie, ricorrenza attuale, scorte, confezione e countdown resteranno quelli del farmaco attuale.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = target != null,
+                onClick = { target?.let(onConfirm) }
+            ) {
+                Text("Conferma unione")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annulla")
+            }
+        }
+    )
 }
 
 private data class MedicationHistorySummary(
