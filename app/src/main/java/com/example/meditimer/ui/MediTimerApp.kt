@@ -224,6 +224,13 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.6.8" to listOf(
+                "Restyling grafico delle schermate Farmaci, Sveglie e Confezioni.",
+                "Farmaci più compatti con indicatore grafico Attivo/Sospeso.",
+                "Riquadri Sveglie uniformati in larghezza e Confezioni ottimizzata con indicatori più grandi e pulsanti più compatti.",
+                "Aggiunte ricerca testuale e ordinamento A–Z / Z–A in Farmaci e Confezioni.",
+                "Nessuna modifica alla logica funzionale dell'app."
+            ),
             "0.6.7" to listOf(
                 "Aggiunta guida interattiva passo-passo all'utilizzo di MediTimer.",
                 "La guida viene proposta automaticamente su una nuova installazione senza farmaci configurati.",
@@ -736,41 +743,227 @@ private fun markNotTaken(context: Context, repo: MedicationRepository, med: Medi
 }
 
 @Composable
+private fun MedicationSearchSortBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    ascending: Boolean,
+    onToggleSort: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.weight(1f),
+            placeholder = { Text("Cerca farmaco…") },
+            leadingIcon = {
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(19.dp)
+                )
+            },
+            trailingIcon = if (query.isNotEmpty()) {
+                {
+                    IconButton(onClick = { onQueryChange("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "Cancella ricerca")
+                    }
+                }
+            } else null,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium
+        )
+        OutlinedButton(
+            onClick = onToggleSort,
+            modifier = Modifier.height(56.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp)
+        ) {
+            Icon(Icons.Default.SortByAlpha, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(5.dp))
+            Text(if (ascending) "A–Z" else "Z–A", fontSize = 12.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
 private fun MedicationListScreen(
     meds: List<Medication>,
     onAdd: () -> Unit,
     onEdit: (Medication) -> Unit,
     onDelete: (Medication) -> Unit
 ) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var sortAscending by rememberSaveable { mutableStateOf(true) }
+
+    val visibleMeds = remember(meds, query, sortAscending) {
+        val filtered = meds.filter { med ->
+            query.isBlank() ||
+                med.name.contains(query, ignoreCase = true) ||
+                med.doseNote.contains(query, ignoreCase = true)
+        }.sortedBy { it.name.lowercase() }
+        if (sortAscending) filtered else filtered.reversed()
+    }
+
     ScreenColumn {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Farmaci", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text(
+                "Farmaci",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
             FilledIconButton(onClick = onAdd) { Icon(Icons.Default.Add, "Aggiungi") }
         }
-        if (meds.isEmpty()) Text("Aggiungi il primo farmaco per creare il piano di assunzione.")
-        meds.forEach { med ->
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+
+        if (meds.isNotEmpty()) {
+            MedicationSearchSortBar(
+                query = query,
+                onQueryChange = { query = it },
+                ascending = sortAscending,
+                onToggleSort = { sortAscending = !sortAscending }
+            )
+        }
+
+        if (meds.isEmpty()) {
+            Text("Aggiungi il primo farmaco per creare il piano di assunzione.")
+        } else if (visibleMeds.isEmpty()) {
+            Text("Nessun farmaco corrisponde alla ricerca.")
+        }
+
+        visibleMeds.forEach { med ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (med.enabled)
+                        MaterialTheme.colorScheme.surfaceVariant
+                    else
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(med.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            if (med.doseNote.isNotBlank()) Text(med.doseNote)
+                        Text(
+                            med.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Surface(
+                            shape = MaterialTheme.shapes.extraLarge,
+                            color = if (med.enabled)
+                                androidx.compose.ui.graphics.Color(0xFFE3F4E8)
+                            else
+                                MaterialTheme.colorScheme.errorContainer
+                        ) {
+                            Text(
+                                if (med.enabled) "● Attivo" else "○ Sospeso",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (med.enabled)
+                                    androidx.compose.ui.graphics.Color(0xFF247A43)
+                                else
+                                    MaterialTheme.colorScheme.error
+                            )
                         }
-                        IconButton(onClick = { onEdit(med) }) { Icon(Icons.Default.Edit, "Modifica") }
-                        IconButton(onClick = { onDelete(med) }) { Icon(Icons.Default.Delete, "Elimina") }
+                        Spacer(Modifier.width(3.dp))
+                        IconButton(
+                            onClick = { onEdit(med) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Edit, "Modifica", modifier = Modifier.size(18.dp))
+                        }
+                        IconButton(
+                            onClick = { onDelete(med) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, "Elimina", modifier = Modifier.size(18.dp))
+                        }
                     }
-                    Text(med.recurrenceLabel())
-                    Text("${med.timesPerActiveDay} assunzion${if (med.timesPerActiveDay == 1) "e" else "i"}/giorno · ${med.alarmTimes.joinToString(" · ")}")
-                    Text(
-                        if (med.packageDurationMode == PackageDurationMode.DAYS)
-                            "Confezione: max ${med.packageMaxDays} giorni"
-                        else
-                            "Confezione: max ${med.packageMaxIntakes} assunzioni"
-                    )
-                    Text("Scorta: ${med.stockCount?.let { "$it confezion${if (it == 1) "e" else "i"}" } ?: "da impostare"}")
-                    Text("Snooze: ${med.snoozeMinutes}min")
-                    if (med.countdownEnabled) Text("Countdown post-assunzione: ${med.countdownMinutes}min")
-                    if (!med.enabled) Text("Sospeso", color = MaterialTheme.colorScheme.error)
+
+                    if (med.doseNote.isNotBlank()) {
+                        Text(
+                            med.doseNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(Icons.Default.Alarm, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Text(
+                            "${med.timesPerActiveDay}×/giorno · ${med.alarmTimes.joinToString(" · ")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(Icons.Default.Repeat, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Text(
+                            med.recurrenceLabel(),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Text(
+                                if (med.packageDurationMode == PackageDurationMode.DAYS)
+                                    "${med.packageMaxDays} gg"
+                                else
+                                    "${med.packageMaxIntakes} ass.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Default.Inventory, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Text(
+                                med.stockCount?.let { "$it in scorta" } ?: "scorta —",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Default.Snooze, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Text("${med.snoozeMinutes} min", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (med.countdownEnabled) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Text("${med.countdownMinutes} min", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -781,13 +974,32 @@ private fun MedicationListScreen(
 private fun AlarmListScreen(meds: List<Medication>, onEdit: (Medication) -> Unit) {
     ScreenColumn {
         Text("Sveglie", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("Gli orari sono collegati alla regola di ricorrenza del farmaco.")
+        Text(
+            "Gli orari sono collegati alla regola di ricorrenza del farmaco.",
+            style = MaterialTheme.typography.bodyMedium
+        )
         meds.filter { it.enabled }.forEach { med ->
-            Card(onClick = { onEdit(med) }) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(med.name, fontWeight = FontWeight.Bold)
-                    Text(med.recurrenceLabel())
-                    med.alarmTimes.forEachIndexed { i, time -> Text("${i + 1}. $time") }
+            Card(
+                onClick = { onEdit(med) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(med.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(med.recurrenceLabel(), style = MaterialTheme.typography.bodySmall)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Default.Alarm, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Text(
+                            med.alarmTimes.joinToString(" · "),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
@@ -1336,6 +1548,17 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
     val today = LocalDate.now()
     var stockAction by remember { mutableStateOf<StockAction?>(null) }
     var intakeRemainingMedication by remember { mutableStateOf<Medication?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var sortAscending by rememberSaveable { mutableStateOf(true) }
+
+    val visibleMeds = remember(meds, query, sortAscending) {
+        val filtered = meds.filter { med ->
+            query.isBlank() ||
+                med.name.contains(query, ignoreCase = true) ||
+                med.doseNote.contains(query, ignoreCase = true)
+        }.sortedBy { it.name.lowercase() }
+        if (sortAscending) filtered else filtered.reversed()
+    }
 
     val warnings = meds.flatMap { med ->
         val items = mutableListOf<String>()
@@ -1374,6 +1597,15 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
     ScreenColumn {
         Text("Confezioni", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
 
+        if (meds.isNotEmpty()) {
+            MedicationSearchSortBar(
+                query = query,
+                onQueryChange = { query = it },
+                ascending = sortAscending,
+                onToggleSort = { sortAscending = !sortAscending }
+            )
+        }
+
         if (warnings.isNotEmpty()) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1386,7 +1618,7 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
             }
         }
 
-        meds.forEach { med ->
+        visibleMeds.forEach { med ->
             val last = med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
             val dayRemaining = if (med.packageDurationMode == PackageDurationMode.DAYS) {
                 last?.plusDays(med.packageMaxDays.toLong())?.toEpochDay()?.minus(today.toEpochDay())
@@ -1394,7 +1626,7 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
             val intakeRemaining = if (med.packageDurationMode == PackageDurationMode.INTAKES) repo.getPackageIntakesRemaining(med) else null
 
             Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(med.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                         when (med.stockCount) {
@@ -1406,15 +1638,35 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                     }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Surface(modifier = Modifier.weight(1f), shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
-                            Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(last?.itDate() ?: "—", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                Text("Ultimo cambio", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Surface(
+                            modifier = Modifier.weight(1f).height(104.dp),
+                            shape = MaterialTheme.shapes.medium,
+                            tonalElevation = 1.dp
+                        ) {
+                            Column(
+                                Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.height(5.dp))
+                                Text(last?.itDate() ?: "—", fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1)
+                                Text("Ultimo cambio", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                             }
                         }
-                        Surface(modifier = Modifier.weight(1f), shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
-                            Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Surface(
+                            modifier = Modifier.weight(1f).height(104.dp),
+                            shape = MaterialTheme.shapes.medium,
+                            tonalElevation = 1.dp
+                        ) {
+                            Column(
+                                Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
                                 val progressRemaining = intakeRemaining?.toLong() ?: dayRemaining
+                                Icon(Icons.Default.HourglassBottom, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.height(5.dp))
                                 Text(
                                     when {
                                         progressRemaining == null -> "—"
@@ -1422,7 +1674,7 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                                         else -> "−${-progressRemaining}"
                                     },
                                     fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.titleMedium,
+                                    fontSize = 20.sp,
                                     color = if ((progressRemaining ?: 99L) <= 7L) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
@@ -1433,28 +1685,44 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                                         else -> "Giorni mancanti"
                                     },
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
-                        Surface(modifier = Modifier.weight(1f), shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
-                            Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Surface(
+                            modifier = Modifier.weight(1f).height(104.dp),
+                            shape = MaterialTheme.shapes.medium,
+                            tonalElevation = 1.dp
+                        ) {
+                            Column(
+                                Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.height(5.dp))
                                 Text(
                                     med.stockCount?.toString() ?: "—",
                                     fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.titleMedium,
+                                    fontSize = 20.sp,
                                     color = if ((med.stockCount ?: 99) <= 1) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                                 )
-                                Text("Confezioni rimaste", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Confezioni rimaste", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
                             }
                         }
                     }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { registerPackageChange(context, repo, med, today, refresh) }, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Default.Check, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Cambiata oggi")
+                        Button(
+                            onClick = { registerPackageChange(context, repo, med, today, refresh) },
+                            modifier = Modifier.weight(1f).height(42.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Cambiata oggi", fontSize = 12.sp, maxLines = 2)
                         }
                         OutlinedButton(
                             onClick = {
@@ -1462,11 +1730,12 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                                     updatePackageOpeningDate(context, repo, med, selected, refresh)
                                 }
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).height(42.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Icon(Icons.Default.CalendarMonth, contentDescription = null)
+                            Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Modifica data")
+                            Text("Modifica data", fontSize = 12.sp, maxLines = 1)
                         }
                     }
 
@@ -1477,60 +1746,71 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                         ) {
                             OutlinedButton(
                                 onClick = { stockAction = StockAction(med, StockMode.SET) },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f).height(42.dp),
+                                contentPadding = PaddingValues(horizontal = 7.dp, vertical = 4.dp)
                             ) {
-                                Text("Imposta scorta", fontSize = 12.sp, maxLines = 1)
+                                Text("Imposta scorta", fontSize = 11.sp, maxLines = 1)
                             }
                             OutlinedButton(
                                 onClick = { intakeRemainingMedication = med },
                                 enabled = med.lastPackageChangeEpochDay != null,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f).height(42.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 3.dp)
                             ) {
                                 Text(
                                     "Imposta assunzioni rimaste",
-                                    fontSize = 11.sp,
-                                    maxLines = 2
+                                    fontSize = 10.sp,
+                                    maxLines = 2,
+                                    lineHeight = 11.sp
                                 )
                             }
                         }
                     } else {
                         OutlinedButton(
                             onClick = { stockAction = StockAction(med, StockMode.SET) },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
                         ) {
-                            Text("Imposta scorta")
+                            Text("Imposta scorta", fontSize = 12.sp)
                         }
                     }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = { stockAction = StockAction(med, StockMode.ADD) },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null)
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Acquisto")
+                            Text("Acquisto", fontSize = 12.sp)
                         }
                         OutlinedButton(
                             onClick = { stockAction = StockAction(med, StockMode.REMOVE) },
                             enabled = (med.stockCount ?: 0) > 0,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
                         ) {
-                            Icon(Icons.Default.Remove, contentDescription = null)
+                            Icon(Icons.Default.Remove, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Scarto")
+                            Text("Scarto", fontSize = 12.sp)
                         }
                     }
 
                     Text(
                         "La scorta comprende solo le confezioni chiuse; quella in uso non è conteggiata.",
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
         }
-        if (meds.isEmpty()) Text("Nessun farmaco configurato.")
+        if (meds.isEmpty()) {
+            Text("Nessun farmaco configurato.")
+        } else if (visibleMeds.isEmpty()) {
+            Text("Nessun farmaco corrisponde alla ricerca.")
+        }
     }
 
     stockAction?.let { action ->

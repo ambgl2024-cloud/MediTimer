@@ -1,3 +1,11 @@
+# MediTimer v0.6.8
+
+Restyling grafico approvato:
+- Farmaci: schede più compatte, icone al posto di etichette verbose, indicatore Attivo/Sospeso, ricerca e ordinamento A–Z/Z–A.
+- Sveglie: schede tutte della stessa larghezza, altezza variabile in base al contenuto.
+- Confezioni: indicatori informativi più grandi e uniformi; pulsanti più compatti; ricerca e ordinamento A–Z/Z–A.
+- Nessuna modifica alla logica funzionale, alle notifiche, alla gestione scorte, al countdown o alla guida.
+
 # MediTimer v0.6.7
 
 Modifica richiesta: sola aggiunta della guida interattiva.
