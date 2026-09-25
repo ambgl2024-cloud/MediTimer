@@ -8,6 +8,7 @@ import java.time.temporal.ChronoUnit
 
 enum class RecurrenceType { DAILY, WEEKDAYS, EVERY_N_DAYS, MONTHLY_DAYS }
 enum class PackageDurationMode { DAYS, INTAKES }
+enum class StockReminderMode { NONE, REORDER_POINT, TIME_REMAINING }
 
 data class Medication(
     val id: Long = System.currentTimeMillis(),
@@ -27,6 +28,8 @@ data class Medication(
     val lastPackageChangeEpochDay: Long? = null,
     val lastPackageChangeMillis: Long? = null,
     val stockCount: Int? = null,
+    val stockReminderMode: StockReminderMode = StockReminderMode.REORDER_POINT,
+    val stockReminderThreshold: Int = 1,
     val countdownEnabled: Boolean = false,
     val countdownMinutes: Int = 0,
     val countdownNote: String = "",
@@ -64,6 +67,8 @@ data class Medication(
         if (lastPackageChangeEpochDay != null) put("lastPackageChangeEpochDay", lastPackageChangeEpochDay)
         if (lastPackageChangeMillis != null) put("lastPackageChangeMillis", lastPackageChangeMillis)
         if (stockCount != null) put("stockCount", stockCount)
+        put("stockReminderMode", stockReminderMode.name)
+        put("stockReminderThreshold", stockReminderThreshold)
         put("countdownEnabled", countdownEnabled)
         put("countdownMinutes", countdownMinutes)
         put("countdownNote", countdownNote)
@@ -97,6 +102,10 @@ data class Medication(
                 lastPackageChangeEpochDay = if (o.has("lastPackageChangeEpochDay")) o.optLong("lastPackageChangeEpochDay") else null,
                 lastPackageChangeMillis = if (o.has("lastPackageChangeMillis")) o.optLong("lastPackageChangeMillis") else null,
                 stockCount = if (o.has("stockCount") && !o.isNull("stockCount")) o.optInt("stockCount", 0).coerceAtLeast(0) else null,
+                stockReminderMode = runCatching {
+                    StockReminderMode.valueOf(o.optString("stockReminderMode", "REORDER_POINT"))
+                }.getOrDefault(StockReminderMode.REORDER_POINT),
+                stockReminderThreshold = o.optInt("stockReminderThreshold", 1).coerceAtLeast(0),
                 countdownEnabled = o.optBoolean("countdownEnabled", false),
                 countdownMinutes = o.optInt("countdownMinutes", 0),
                 countdownNote = o.optString("countdownNote"),

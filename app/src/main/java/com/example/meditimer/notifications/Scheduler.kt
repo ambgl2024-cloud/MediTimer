@@ -10,6 +10,8 @@ import com.example.meditimer.data.Medication
 import com.example.meditimer.data.MedicationRepository
 import com.example.meditimer.data.PackageDurationMode
 import com.example.meditimer.data.PendingSnooze
+import com.example.meditimer.data.StockReminderMode
+import com.example.meditimer.data.evaluateStockReminder
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -128,19 +130,54 @@ object Scheduler {
     }
 
     fun scheduleNextStockReminder(context: Context, medication: Medication) {
-        val stock = medication.stockCount
-        if (!medication.enabled || stock == null || stock > 1) {
-            cancelStockReminder(context, medication.id)
-            return
-        }
         val repo = MedicationRepository(context)
         val zone = ZoneId.systemDefault()
         val now = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).atZone(zone).toLocalDateTime()
         val today = now.toLocalDate()
-        val lastShown = repo.getLastStockReminderEpochDay(medication.id)
-        var targetDate = if (lastShown == today.toEpochDay()) today.plusDays(1) else today
-        var candidate = LocalDateTime.of(targetDate, LocalTime.of(PACKAGE_REMINDER_HOUR, 0))
-        if (targetDate == today && !candidate.isAfter(now)) candidate = now.plusSeconds(3)
+
+        if (!medication.enabled || medication.stockReminderMode == StockReminderMode.NONE) {
+            cancelStockReminder(context, medication.id)
+            repo.clearStockReminderState(medication.id)
+            NotificationHelper.cancelLowStockWarning(context, medication.id)
+            return
+        }
+
+        val evaluation = evaluateStockReminder(medication, repo, today)
+
+        // A time-based reminder in DAYS can be scheduled in advance once the last package
+        // is in use (stock = 0). Intake-based reminders are re-evaluated after each Assunto.
+        if (!evaluation.active) {
+            cancelStockReminder(context, medication.id)
+            repo.clearStockReminderState(medication.id)
+            NotificationHelper.cancelLowStockWarning(context, medication.id)
+
+            if (
+                medication.stockReminderMode == StockReminderMode.TIME_REMAINING &&
+                medication.packageDurationMode == PackageDurationMode.DAYS &&
+                medication.stockCount == 0 &&
+                medication.lastPackageChangeEpochDay != null
+            ) {
+                val due = LocalDate.ofEpochDay(medication.lastPackageChangeEpochDay)
+                    .plusDays(medication.packageMaxDays.toLong())
+                val warningDate = due.minusDays(medication.stockReminderThreshold.toLong())
+                if (today.isBefore(warningDate)) {
+                    val candidate = LocalDateTime.of(warningDate, LocalTime.of(PACKAGE_REMINDER_HOUR, 0))
+                    val pi = stockReminderPendingIntent(context, medication.id, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
+                    scheduleAlarm(context, candidate.atZone(zone).toInstant().toEpochMilli(), pi)
+                }
+            }
+            return
+        }
+
+        val lastShownEpoch = repo.getLastStockReminderEpochDay(medication.id)
+        val nextReminderDate = lastShownEpoch?.let { LocalDate.ofEpochDay(it).plusDays(7) }
+        val candidate = when {
+            lastShownEpoch == null -> now.plusSeconds(3)
+            nextReminderDate != null && !today.isBefore(nextReminderDate) -> now.plusSeconds(3)
+            nextReminderDate != null -> LocalDateTime.of(nextReminderDate, LocalTime.of(PACKAGE_REMINDER_HOUR, 0))
+            else -> now.plusSeconds(3)
+        }
+
         val pi = stockReminderPendingIntent(context, medication.id, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
         scheduleAlarm(context, candidate.atZone(zone).toInstant().toEpochMilli(), pi)
     }

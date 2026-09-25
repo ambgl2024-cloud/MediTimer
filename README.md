@@ -1,3 +1,18 @@
+# MediTimer v0.7.1
+
+Modifiche richieste:
+- reminder di riacquisto scorta configurabile per farmaco: Nessuno / Punto di riordino / Tempo residuo;
+- Punto di riordino: avviso quando scorta <= soglia;
+- Tempo residuo: con scorta 0, avviso X giorni o X assunzioni prima della fine dell’ultima confezione;
+- primo avviso Android + promemoria settimanale finché la condizione resta valida;
+- avviso sempre visibile in Oggi mentre la condizione è valida;
+- farmaci esistenti migrati automaticamente a Punto di riordino, soglia 1;
+- Storia con filtro superiore persistente: mese corrente/precedente, anno corrente, settimana corrente/precedente, da sempre, Dal–Al;
+- KPI: regolarità periodo, mese, anno, da sempre, andamento recente, orari medi per slot con scostamento e dispersione, periodi più critici;
+- Timeline e Farmaci mantengono presentazione discorsiva e usano lo stesso filtro persistente.
+
+Non sono state modificate le logiche di sveglie farmaco, snooze, countdown o doppio bip.
+
 # MediTimer v0.7.0
 
 Modifica richiesta: correzione manuale dei farmaci duplicati nella Storia.

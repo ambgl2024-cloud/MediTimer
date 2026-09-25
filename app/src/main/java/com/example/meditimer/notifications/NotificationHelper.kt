@@ -204,6 +204,32 @@ object NotificationHelper {
         runCatching { NotificationManagerCompat.from(context).notify(stockNotificationId(medication.id), n) }
     }
 
+    fun showStockPurchaseReminder(
+        context: Context,
+        medication: Medication,
+        body: String,
+        weeklyReminder: Boolean
+    ) {
+        ensureChannels(context)
+        val openIntent = PendingIntent.getActivity(
+            context,
+            ("stock-open:${medication.id}").hashCode(),
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val n = NotificationCompat.Builder(context, CHANNEL_PACKAGE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(if (weeklyReminder) "Promemoria riacquisto" else "Riacquisto consigliato")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent)
+            .build()
+        runCatching { NotificationManagerCompat.from(context).notify(stockNotificationId(medication.id), n) }
+    }
+
     fun cancelLowStockWarning(context: Context, medicationId: Long) {
         NotificationManagerCompat.from(context).cancel(stockNotificationId(medicationId))
     }

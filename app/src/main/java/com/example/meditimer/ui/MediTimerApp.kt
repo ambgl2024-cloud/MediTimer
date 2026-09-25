@@ -32,9 +32,11 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 
 private enum class AppTab(val label: String) {
@@ -230,6 +232,13 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.7.1" to listOf(
+                "Aggiunto Reminder scorta configurabile: Nessuno, Punto di riordino o Tempo residuo.",
+                "Il reminder genera un avviso persistente in Oggi, una notifica Android iniziale e un promemoria settimanale finché resta attivo.",
+                "Per i farmaci esistenti il comportamento viene mantenuto come Punto di riordino con soglia 1.",
+                "Riorganizzata Storia con filtro periodo persistente, KPI di regolarità, analisi degli orari medi e periodi più critici.",
+                "Timeline e Storia per farmaco restano discorsive e rispettano il periodo selezionato."
+            ),
             "0.7.0" to listOf(
                 "Aggiunta in Storia → Farmaci la funzione manuale Unisci farmaci.",
                 "Permette di unire un vecchio farmaco storico/eliminato con il farmaco attuale corrispondente.",
@@ -646,11 +655,8 @@ private fun TodayScreen(
                         else -> "${med.name}: durata superata di ${-intakeRemaining} assunzioni"
                     })
                 }
-                when (med.stockCount) {
-                    0 -> add("${med.name}: scorta esaurita")
-                    1 -> add("${med.name}: ultima confezione in scorta — pianifica l'acquisto")
-                    else -> Unit
-                }
+                val stockReminder = evaluateStockReminder(med, repo, today)
+                if (stockReminder.active) add(stockReminder.message)
             }
             messages.takeIf { it.isNotEmpty() }
         }.flatten()
@@ -736,6 +742,7 @@ private fun markTaken(context: Context, repo: MedicationRepository, med: Medicat
         )
     )
     Scheduler.scheduleNextPackageReminder(context, med)
+    Scheduler.scheduleNextStockReminder(context, repo.getMedication(med.id) ?: med)
     Scheduler.cancelSnooze(context, med.id, epochDay, time)
     NotificationManagerCompat.from(context).cancel(NotificationHelper.notificationId(med.id, time))
     if (med.countdownEnabled && med.countdownMinutes > 0) {
@@ -761,6 +768,7 @@ private fun markNotTaken(context: Context, repo: MedicationRepository, med: Medi
     }
     repo.removeIntake(med.id, epochDay, time)
     Scheduler.scheduleNextPackageReminder(context, med)
+    Scheduler.scheduleNextStockReminder(context, repo.getMedication(med.id) ?: med)
 }
 
 @Composable
@@ -1098,6 +1106,116 @@ private enum class HistorySection(val label: String) {
     OVERVIEW("Panoramica"), TIMELINE("Timeline"), MEDICATIONS("Farmaci")
 }
 
+private enum class HistoryRangePreset(val label: String) {
+    CURRENT_MONTH("Mese corrente"),
+    PREVIOUS_MONTH("Mese precedente"),
+    CURRENT_YEAR("Anno corrente"),
+    CURRENT_WEEK("Settimana corrente"),
+    PREVIOUS_WEEK("Settimana precedente"),
+    ALL_TIME("Da sempre"),
+    CUSTOM("Dal–Al")
+}
+
+private data class HistoryDateRange(
+    val start: LocalDate?,
+    val endInclusive: LocalDate,
+    val label: String
+) {
+    fun startMillis(fallback: Long): Long = start?.atStartOfDay(ZoneId.systemDefault())?.toInstant()?.toEpochMilli() ?: fallback
+    fun endExclusiveMillis(): Long = endInclusive.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+}
+
+private fun historyDateRange(
+    preset: HistoryRangePreset,
+    customStart: LocalDate,
+    customEnd: LocalDate,
+    today: LocalDate = LocalDate.now()
+): HistoryDateRange = when (preset) {
+    HistoryRangePreset.CURRENT_MONTH -> HistoryDateRange(today.withDayOfMonth(1), today, "Mese corrente")
+    HistoryRangePreset.PREVIOUS_MONTH -> {
+        val month = YearMonth.from(today).minusMonths(1)
+        HistoryDateRange(month.atDay(1), month.atEndOfMonth(), "Mese precedente")
+    }
+    HistoryRangePreset.CURRENT_YEAR -> HistoryDateRange(LocalDate.of(today.year, 1, 1), today, "Anno corrente")
+    HistoryRangePreset.CURRENT_WEEK -> {
+        val start = today.minusDays((today.dayOfWeek.value - 1).toLong())
+        HistoryDateRange(start, today, "Settimana corrente")
+    }
+    HistoryRangePreset.PREVIOUS_WEEK -> {
+        val currentStart = today.minusDays((today.dayOfWeek.value - 1).toLong())
+        val start = currentStart.minusWeeks(1)
+        HistoryDateRange(start, start.plusDays(6), "Settimana precedente")
+    }
+    HistoryRangePreset.ALL_TIME -> HistoryDateRange(null, today, "Da sempre")
+    HistoryRangePreset.CUSTOM -> {
+        val start = minOf(customStart, customEnd)
+        val end = minOf(maxOf(customStart, customEnd), today)
+        HistoryDateRange(start, end, "${start.itDate()} – ${end.itDate()}")
+    }
+}
+
+@Composable
+private fun HistoryFilterBar(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    preset: HistoryRangePreset,
+    onPresetChange: (HistoryRangePreset) -> Unit,
+    customStart: LocalDate,
+    customEnd: LocalDate,
+    onCustomStartChange: (LocalDate) -> Unit,
+    onCustomEndChange: (LocalDate) -> Unit,
+    range: HistoryDateRange
+) {
+    val context = LocalContext.current
+    var presetMenu by remember { mutableStateOf(false) }
+
+    Card {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.FilterAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(7.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Filtri periodo", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                    Text(range.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(onClick = { onExpandedChange(!expanded) }) {
+                    Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+                }
+            }
+            if (expanded) {
+                Divider()
+                Spacer(Modifier.height(6.dp))
+                Box {
+                    OutlinedButton(onClick = { presetMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(preset.label, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ArrowDropDown, null)
+                    }
+                    DropdownMenu(expanded = presetMenu, onDismissRequest = { presetMenu = false }) {
+                        HistoryRangePreset.entries.forEach { item ->
+                            DropdownMenuItem(
+                                text = { Text(item.label) },
+                                onClick = { onPresetChange(item); presetMenu = false }
+                            )
+                        }
+                    }
+                }
+                if (preset == HistoryRangePreset.CUSTOM) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { showDatePicker(context, customStart, onCustomStartChange) },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Dal ${customStart.itDate()}", fontSize = 11.sp, maxLines = 1) }
+                        OutlinedButton(
+                            onClick = { showDatePicker(context, customEnd, onCustomEndChange) },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Al ${customEnd.itDate()}", fontSize = 11.sp, maxLines = 1) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun HistoryScreen(
     repo: MedicationRepository,
@@ -1105,65 +1223,395 @@ private fun HistoryScreen(
     revision: Int,
     refresh: () -> Unit
 ) {
-    var section by remember { mutableStateOf(HistorySection.OVERVIEW) }
+    var section by rememberSaveable { mutableStateOf(HistorySection.OVERVIEW) }
+    var filtersExpanded by rememberSaveable { mutableStateOf(false) }
+    var presetName by rememberSaveable { mutableStateOf(HistoryRangePreset.CURRENT_MONTH.name) }
+    var customStartEpoch by rememberSaveable { mutableLongStateOf(LocalDate.now().minusDays(30).toEpochDay()) }
+    var customEndEpoch by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
+
+    val preset = runCatching { HistoryRangePreset.valueOf(presetName) }.getOrDefault(HistoryRangePreset.CURRENT_MONTH)
+    val customStart = LocalDate.ofEpochDay(customStartEpoch)
+    val customEnd = LocalDate.ofEpochDay(customEndEpoch)
+    val range = historyDateRange(preset, customStart, customEnd)
+
     val history = remember(revision, meds) { repo.getTherapyHistory() }
     val intakes = remember(revision, meds) { repo.getIntakes() }
     val periods = remember(history) { buildTherapyPeriods(history) }
+    val earliestEvidence = remember(periods, intakes) {
+        listOfNotNull(periods.minOfOrNull { it.startMillis }, intakes.minOfOrNull { it.takenAtMillis }).minOrNull()
+            ?: System.currentTimeMillis()
+    }
+    val startMillis = range.startMillis(earliestEvidence)
+    val endMillis = range.endExclusiveMillis()
 
-    ScreenColumn {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         Text("Storia", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
 
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             HistorySection.entries.forEach { item ->
                 FilterChip(
                     selected = section == item,
                     onClick = { section = item },
-                    label = {
-                        Text(
-                            item.label,
-                            fontSize = 12.sp,
-                            maxLines = 1
-                        )
-                    },
+                    label = { Text(item.label, fontSize = 12.sp, maxLines = 1) },
                     modifier = Modifier.weight(1f)
                 )
             }
         }
 
-        when (section) {
-            HistorySection.OVERVIEW -> HistoryOverviewContent(meds, periods, intakes)
-            HistorySection.TIMELINE -> HistoryTimelineContent(periods, history, intakes)
-            HistorySection.MEDICATIONS -> HistoryMedicationsContent(
-                meds = meds,
-                history = history,
-                periods = periods,
-                intakes = intakes,
-                repo = repo,
-                onMerged = refresh
+        HistoryFilterBar(
+            expanded = filtersExpanded,
+            onExpandedChange = { filtersExpanded = it },
+            preset = preset,
+            onPresetChange = { presetName = it.name },
+            customStart = customStart,
+            customEnd = customEnd,
+            onCustomStartChange = { customStartEpoch = it.toEpochDay() },
+            onCustomEndChange = { customEndEpoch = it.toEpochDay() },
+            range = range
+        )
+
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            when (section) {
+                HistorySection.OVERVIEW -> HistoryKpiFilteredContent(
+                    meds, periods, intakes, startMillis, endMillis, range.label, earliestEvidence
+                )
+                HistorySection.TIMELINE -> HistoryTimelineFilteredContent(
+                    periods, intakes, startMillis, endMillis
+                )
+                HistorySection.MEDICATIONS -> HistoryMedicationsFilteredContent(
+                    meds, history, periods, intakes, repo, refresh, startMillis, endMillis
+                )
+            }
+
+            if (history.any { it.legacyBaseline }) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text(
+                            "Per i periodi precedenti al tracciamento della Storia, MediTimer usa solo i dati disponibili e non inventa modifiche di schema non registrate.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun HistoryKpiFilteredContent(
+    meds: List<Medication>,
+    periods: List<TherapyPeriod>,
+    intakes: List<IntakeEvent>,
+    rangeStartMillis: Long,
+    rangeEndMillis: Long,
+    rangeLabel: String,
+    earliestEvidenceMillis: Long
+) {
+    val now = System.currentTimeMillis()
+    val today = LocalDate.now()
+    val selectedStats = remember(periods, intakes, rangeStartMillis, rangeEndMillis) {
+        adherenceForPeriods(periods, intakes, rangeStartMillis, rangeEndMillis, now)
+    }
+    val monthStart = today.withDayOfMonth(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val yearStart = LocalDate.of(today.year, 1, 1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val monthStats = remember(periods, intakes, today) { adherenceForPeriods(periods, intakes, monthStart, now + 1, now) }
+    val yearStats = remember(periods, intakes, today) { adherenceForPeriods(periods, intakes, yearStart, now + 1, now) }
+    val foreverStats = remember(periods, intakes, earliestEvidenceMillis) { adherenceForPeriods(periods, intakes, earliestEvidenceMillis, now + 1, now) }
+
+    val rangeEndDate = Instant.ofEpochMilli(minOf(rangeEndMillis - 1, now)).atZone(ZoneId.systemDefault()).toLocalDate()
+    val last14Start = maxOf(
+        Instant.ofEpochMilli(rangeStartMillis).atZone(ZoneId.systemDefault()).toLocalDate(),
+        rangeEndDate.minusDays(13)
+    )
+    val last14 = remember(periods, intakes, last14Start, rangeEndDate) {
+        dailyAdherence(periods, intakes, last14Start, (rangeEndDate.toEpochDay() - last14Start.toEpochDay() + 1).toInt().coerceAtLeast(1), now)
+    }
+    val observations = remember(periods, intakes, rangeStartMillis, rangeEndMillis) {
+        doseObservations(periods, intakes, rangeStartMillis, rangeEndMillis, now)
+    }
+    val timing = remember(observations) { timingSlotStats(observations) }
+    val critical = remember(observations) { criticalPeriods(observations) }
+
+    Card {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Regolarità assunzioni · $rangeLabel", fontWeight = FontWeight.Bold)
+            Text(
+                selectedStats.percentage?.let { "$it%" } ?: "—",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                if (selectedStats.expected > 0) "${selectedStats.taken} registrate su ${selectedStats.expected} previste"
+                else "Nessuna assunzione prevista nel periodo",
+                style = MaterialTheme.typography.bodySmall
             )
         }
+    }
 
-        if (history.any { it.legacyBaseline }) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                Row(
-                    Modifier.fillMaxWidth().padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text(
-                        "Per i farmaci già presenti prima della funzione Storia, le eventuali vecchie modifiche " +
-                            "di orari o ricorrenza non possono essere recuperate. Per quel periodo la regolarità " +
-                            "è ricostruita usando la configurazione disponibile al momento dell'aggiornamento.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f)
-                    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        HistoryMiniMetric("Mese", monthStats.percentage?.let { "$it%" } ?: "—", Modifier.weight(1f))
+        HistoryMiniMetric("Anno", yearStats.percentage?.let { "$it%" } ?: "—", Modifier.weight(1f))
+        HistoryMiniMetric("Da sempre", foreverStats.percentage?.let { "$it%" } ?: "—", Modifier.weight(1f))
+    }
+
+    Card {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Andamento ultimi giorni del periodo", fontWeight = FontWeight.Bold)
+            Row(
+                Modifier.fillMaxWidth().height(90.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                last14.forEach { (date, stats) ->
+                    val fraction = stats.percentage?.div(100f)?.coerceIn(0.08f, 1f) ?: 0.08f
+                    Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
+                        Box(
+                            Modifier.width(11.dp).fillMaxHeight(fraction).background(
+                                if (stats.expected > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                MaterialTheme.shapes.small
+                            )
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(date.dayOfMonth.toString(), fontSize = 8.sp)
+                    }
                 }
             }
         }
+    }
+
+    Text("Orari medi di assunzione", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    if (timing.none { it.taken > 0 }) {
+        Text("Non ci sono abbastanza assunzioni registrate nel periodo per calcolare gli orari medi.")
+    } else {
+        timing.filter { it.taken > 0 }.groupBy { it.medicationName }.forEach { (name, slots) ->
+            Card {
+                Column(Modifier.fillMaxWidth().padding(13.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(name, fontWeight = FontWeight.Bold)
+                    slots.forEach { slot ->
+                        val deviation = slot.meanDeviationMinutes ?: 0
+                        val deviationText = when {
+                            deviation > 0 -> "+$deviation min"
+                            deviation < 0 -> "$deviation min"
+                            else -> "0 min"
+                        }
+                        Text(
+                            "Previsto ${slot.plannedTime} → media ${slot.averageTakenTime ?: "—"} · scostamento $deviationText · variabilità ±${slot.dispersionMinutes ?: 0} min",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    Text("Periodi più critici", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    Card {
+        Column(Modifier.fillMaxWidth().padding(13.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            ProblemPeriodLine("Giorno della settimana", critical.weekday)
+            ProblemPeriodLine("Settimana", critical.week)
+            ProblemPeriodLine("Mese", critical.month)
+            Text(
+                "Il periodo peggiore è determinato prima dalla percentuale di assunzioni non registrate; a valori simili pesa maggiormente lo scostamento medio dall'orario previsto.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun HistoryMiniMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Card(modifier) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(label, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun ProblemPeriodLine(label: String, item: ProblemGroupStats?) {
+    if (item == null || item.expected == 0) {
+        Text("$label: —", style = MaterialTheme.typography.bodySmall)
+    } else {
+        val missed = item.expected - item.taken
+        Text(
+            "$label: ${item.label} · $missed/${item.expected} non registrate · scostamento medio ${item.meanAbsoluteDeviationMinutes.toInt()} min",
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+@Composable
+private fun HistoryTimelineFilteredContent(
+    periods: List<TherapyPeriod>,
+    intakes: List<IntakeEvent>,
+    rangeStartMillis: Long,
+    rangeEndMillis: Long
+) {
+    val now = System.currentTimeMillis()
+    val visible = periods.filter { period ->
+        val end = period.endMillisExclusive ?: Long.MAX_VALUE
+        end > rangeStartMillis && period.startMillis < rangeEndMillis
+    }.sortedBy { it.startMillis }
+
+    Text(
+        "Questa parte racconta in ordine temporale quali farmaci erano previsti, con quale schema e quanto regolarmente sono stati registrati. Non include acquisti, scarti o cambi confezione.",
+        style = MaterialTheme.typography.bodyMedium
+    )
+
+    if (visible.isEmpty()) Text("Nessuna terapia registrata nel periodo selezionato.")
+
+    visible.forEach { period ->
+        val start = maxOf(period.startMillis, rangeStartMillis)
+        val end = minOf(period.endMillisExclusive ?: rangeEndMillis, rangeEndMillis, now + 1)
+        if (end > start) {
+            val stats = adherenceForPeriods(listOf(period), intakes, start, end, now, period.medicationId)
+            val observations = doseObservations(listOf(period), intakes, start, end, now, period.medicationId)
+            val timing = timingSlotStats(observations).filter { it.taken > 0 }
+            val startDate = millisDate(start)
+            val endDate = millisDate((end - 1).coerceAtLeast(start))
+
+            Card {
+                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("$startDate – $endDate", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    Text(period.medicationName, fontWeight = FontWeight.Bold)
+                    if (!period.snapshot.enabled) {
+                        Text("In questo periodo il farmaco risultava sospeso: non erano previste assunzioni.")
+                    } else {
+                        val adherenceText = if (stats.expected > 0) {
+                            "Hai registrato ${stats.taken} delle ${stats.expected} assunzioni previste (${stats.percentage ?: 0}%)."
+                        } else "Non ci sono abbastanza dati per calcolare la regolarità delle assunzioni."
+                        Text("Lo schema previsto era ${period.snapshot.scheduleDescription()}. $adherenceText")
+                        if (timing.isNotEmpty()) {
+                            val timeText = timing.joinToString(" ") { slot ->
+                                val dev = slot.meanDeviationMinutes ?: 0
+                                val direction = when { dev > 0 -> "$dev minuti dopo"; dev < 0 -> "${-dev} minuti prima"; else -> "in linea con" }
+                                "Per l'orario ${slot.plannedTime}, l'assunzione media è stata alle ${slot.averageTakenTime ?: "—"}, $direction l'orario impostato (variabilità ±${slot.dispersionMinutes ?: 0} min)."
+                            }
+                            Text(timeText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryMedicationsFilteredContent(
+    meds: List<Medication>,
+    history: List<TherapyHistoryEntry>,
+    periods: List<TherapyPeriod>,
+    intakes: List<IntakeEvent>,
+    repo: MedicationRepository,
+    onMerged: () -> Unit,
+    rangeStartMillis: Long,
+    rangeEndMillis: Long
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var ascending by rememberSaveable { mutableStateOf(true) }
+    var mergeSource by remember { mutableStateOf<MedicationHistorySummary?>(null) }
+    val now = System.currentTimeMillis()
+    val currentById = remember(meds) { meds.associateBy { it.id } }
+    val historyById = remember(history) { history.groupBy { it.medicationId } }
+    val intakesById = remember(intakes) { intakes.groupBy { it.medicationId } }
+    val ids = remember(meds, history, intakes) { (meds.map { it.id } + history.map { it.medicationId } + intakes.map { it.medicationId }).distinct() }
+
+    MedicationSearchSortBar(query, { query = it }, ascending, { ascending = !ascending })
+
+    val visibleIds = ids.filter { id ->
+        val periodOverlap = periods.any { it.medicationId == id && (it.endMillisExclusive ?: Long.MAX_VALUE) > rangeStartMillis && it.startMillis < rangeEndMillis }
+        val intakeOverlap = intakesById[id].orEmpty().any { it.takenAtMillis in rangeStartMillis until rangeEndMillis }
+        periodOverlap || intakeOverlap
+    }.mapNotNull { id ->
+        val name = currentById[id]?.name
+            ?: historyById[id].orEmpty().lastOrNull()?.snapshot?.name
+            ?: intakesById[id].orEmpty().lastOrNull()?.medicationName
+        name?.let { id to it }
+    }.filter { query.isBlank() || it.second.contains(query, ignoreCase = true) }
+        .sortedBy { it.second.lowercase() }
+        .let { if (ascending) it else it.reversed() }
+
+    if (visibleIds.isEmpty()) Text("Nessun farmaco presente nel periodo selezionato.")
+
+    visibleIds.forEach { (id, name) ->
+        val medPeriods = periods.filter {
+            it.medicationId == id && (it.endMillisExclusive ?: Long.MAX_VALUE) > rangeStartMillis && it.startMillis < rangeEndMillis
+        }.sortedBy { it.startMillis }
+        val stats = adherenceForPeriods(periods, intakes, rangeStartMillis, rangeEndMillis, now, id)
+        val current = currentById[id]
+        val entries = historyById[id].orEmpty().sortedBy { it.timestampMillis }
+        val startEvidence = minOf(
+            medPeriods.minOfOrNull { maxOf(it.startMillis, rangeStartMillis) } ?: Long.MAX_VALUE,
+            intakesById[id].orEmpty().filter { it.takenAtMillis in rangeStartMillis until rangeEndMillis }.minOfOrNull { it.takenAtMillis } ?: Long.MAX_VALUE
+        ).takeIf { it != Long.MAX_VALUE } ?: rangeStartMillis
+        val endEvidence = medPeriods.maxOfOrNull { minOf(it.endMillisExclusive ?: rangeEndMillis, rangeEndMillis) }?.minus(1)
+        val deleted = entries.lastOrNull { it.type == TherapyHistoryType.DELETED }
+        val status = when { current == null && deleted != null -> "Eliminato"; current == null -> "Storico"; current.enabled -> "Attivo"; else -> "Sospeso" }
+        val summary = MedicationHistorySummary(id, name, startEvidence, endEvidence, status, current ?: medPeriods.lastOrNull()?.snapshot, stats, intakesById[id].orEmpty().count { it.takenAtMillis in rangeStartMillis until rangeEndMillis })
+
+        Card {
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text(status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+                val narrativeParts = mutableListOf<String>()
+                medPeriods.forEach { period ->
+                    val start = maxOf(period.startMillis, rangeStartMillis)
+                    val end = minOf(period.endMillisExclusive ?: rangeEndMillis, rangeEndMillis)
+                    if (end <= start) return@forEach
+                    val dates = "Dal ${millisDate(start)} al ${millisDate((end - 1).coerceAtLeast(start))}"
+                    if (!period.snapshot.enabled) {
+                        narrativeParts += "$dates il farmaco risultava sospeso."
+                    } else {
+                        val pStats = adherenceForPeriods(listOf(period), intakes, start, end, now, id)
+                        val reg = if (pStats.expected > 0) " Regolarità ${pStats.percentage ?: 0}% (${pStats.taken}/${pStats.expected})." else ""
+                        narrativeParts += "$dates lo schema era ${period.snapshot.scheduleDescription()}.$reg"
+                    }
+                }
+                Text(
+                    narrativeParts.joinToString(" ").ifBlank {
+                        "Nel periodo selezionato risultano ${summary.registeredIntakes} assunzioni registrate."
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (id !in currentById && meds.isNotEmpty()) {
+                    TextButton(onClick = { mergeSource = summary }, modifier = Modifier.align(Alignment.End)) {
+                        Text("Unisci con farmaco attuale")
+                    }
+                }
+            }
+        }
+    }
+
+    mergeSource?.let { source ->
+        MedicationMergeDialog(
+            source = source,
+            currentMedications = meds,
+            onDismiss = { mergeSource = null },
+            onConfirm = { target ->
+                if (repo.mergeHistoricalMedication(source.id, target.id)) {
+                    mergeSource = null
+                    onMerged()
+                }
+            }
+        )
     }
 }
 
@@ -2643,8 +3091,10 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
         }
         when (med.stockCount) {
             null -> items += "${med.name}: imposta la scorta iniziale"
-            0 -> items += "${med.name}: scorta esaurita — acquisto necessario"
-            1 -> items += "${med.name}: ultima confezione in scorta — pianifica l'acquisto"
+            else -> {
+                val stockReminder = evaluateStockReminder(med, repo, today)
+                if (stockReminder.active) items += stockReminder.message
+            }
         }
         items
     }
@@ -2850,15 +3300,8 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                 }
                 val updated = action.medication.copy(stockCount = newStock)
                 repo.upsertMedication(updated)
-                if (newStock <= 1) {
-                    NotificationHelper.showLowStockWarning(context, updated, newStock)
-                    repo.markStockReminderShown(updated.id, LocalDate.now().toEpochDay())
-                    Scheduler.scheduleNextStockReminder(context, updated)
-                } else {
-                    NotificationHelper.cancelLowStockWarning(context, updated.id)
-                    repo.clearStockReminderState(updated.id)
-                    Scheduler.cancelStockReminder(context, updated.id)
-                }
+                Scheduler.scheduleNextStockReminder(context, updated)
+
                 stockAction = null
                 refresh()
             }
@@ -2881,6 +3324,7 @@ private fun PackageScreen(meds: List<Medication>, repo: MedicationRepository, re
                 repo.upsertMedication(updated)
                 repo.clearPackageReminderState(updated.id)
                 Scheduler.scheduleNextPackageReminder(context, updated)
+                Scheduler.scheduleNextStockReminder(context, updated)
                 intakeRemainingMedication = null
                 refresh()
             }
@@ -2989,15 +3433,7 @@ private fun registerPackageChange(
     repo.upsertMedication(updated)
     repo.clearPackageReminderState(medication.id)
     Scheduler.scheduleNextPackageReminder(context, updated)
-    if (newStock != null && newStock <= 1) {
-        NotificationHelper.showLowStockWarning(context, updated, newStock)
-        repo.markStockReminderShown(updated.id, LocalDate.now().toEpochDay())
-        Scheduler.scheduleNextStockReminder(context, updated)
-    } else if (newStock != null) {
-        NotificationHelper.cancelLowStockWarning(context, updated.id)
-        repo.clearStockReminderState(updated.id)
-        Scheduler.cancelStockReminder(context, updated.id)
-    }
+    Scheduler.scheduleNextStockReminder(context, updated)
     refresh()
 }
 
@@ -3019,6 +3455,7 @@ private fun updatePackageOpeningDate(
     // Correzione della data registrata: la scorta non viene modificata.
     repo.clearPackageReminderState(updated.id)
     Scheduler.scheduleNextPackageReminder(context, updated)
+    Scheduler.scheduleNextStockReminder(context, updated)
     refresh()
 }
 
@@ -3056,6 +3493,8 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
     var packageDurationMode by remember(initial) { mutableStateOf(initial?.packageDurationMode ?: PackageDurationMode.DAYS) }
     var packageDays by remember(initial) { mutableStateOf((initial?.packageMaxDays?.takeIf { it > 0 } ?: 30).toString()) }
     var packageIntakes by remember(initial) { mutableStateOf((initial?.packageMaxIntakes?.takeIf { it > 0 } ?: 28).toString()) }
+    var stockReminderMode by remember(initial) { mutableStateOf(initial?.stockReminderMode ?: StockReminderMode.REORDER_POINT) }
+    var stockReminderThreshold by remember(initial) { mutableStateOf((initial?.stockReminderThreshold ?: 1).toString()) }
     var countdownEnabled by remember(initial) { mutableStateOf(initial?.countdownEnabled ?: false) }
     var countdownMinutes by remember(initial) { mutableStateOf((initial?.countdownMinutes?.takeIf { it > 0 } ?: 2).toString()) }
     var countdownNote by remember(initial) { mutableStateOf(initial?.countdownNote.orEmpty()) }
@@ -3182,6 +3621,65 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                 }
 
                 Divider()
+                Text("Reminder scorta", fontWeight = FontWeight.Bold)
+                Text(
+                    "Scegli quando MediTimer deve suggerire il riacquisto. L'avviso resta visibile in Oggi; Android invia il primo avviso e poi un promemoria settimanale finché la condizione rimane valida.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                        selected = stockReminderMode == StockReminderMode.NONE,
+                        onClick = { stockReminderMode = StockReminderMode.NONE },
+                        label = { Text("Nessuno") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    FilterChip(
+                        selected = stockReminderMode == StockReminderMode.REORDER_POINT,
+                        onClick = { stockReminderMode = StockReminderMode.REORDER_POINT },
+                        label = { Text("Punto di riordino") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    FilterChip(
+                        selected = stockReminderMode == StockReminderMode.TIME_REMAINING,
+                        onClick = { stockReminderMode = StockReminderMode.TIME_REMAINING },
+                        label = { Text("Tempo residuo") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                when (stockReminderMode) {
+                    StockReminderMode.NONE -> Text(
+                        "Nessun avviso di riacquisto.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    StockReminderMode.REORDER_POINT -> OutlinedTextField(
+                        value = stockReminderThreshold,
+                        onValueChange = { stockReminderThreshold = it.filter(Char::isDigit) },
+                        label = { Text("Confezioni minime a scorta") },
+                        supportingText = { Text("L'avviso scatta quando la scorta è minore o uguale a questa soglia.") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    StockReminderMode.TIME_REMAINING -> OutlinedTextField(
+                        value = stockReminderThreshold,
+                        onValueChange = { stockReminderThreshold = it.filter(Char::isDigit) },
+                        label = {
+                            Text(
+                                if (packageDurationMode == PackageDurationMode.DAYS)
+                                    "Giorni prima della fine dell'ultima confezione"
+                                else
+                                    "Assunzioni prima della fine dell'ultima confezione"
+                            )
+                        },
+                        supportingText = {
+                            Text("Questo reminder è attivo solo quando la scorta delle confezioni chiuse è 0.")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                Divider()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Countdown dopo assunzione", fontWeight = FontWeight.Bold)
@@ -3210,6 +3708,7 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                 val n = everyN.toIntOrNull() ?: 0
                 val pDays = packageDays.toIntOrNull() ?: 0
                 val pIntakes = packageIntakes.toIntOrNull() ?: 0
+                val stockThreshold = stockReminderThreshold.toIntOrNull() ?: -1
                 val c = countdownMinutes.toIntOrNull() ?: 0
                 val snooze = snoozeMinutes.toIntOrNull() ?: 0
                 val monthly = parseMonthlyDays(monthlyDaysText)
@@ -3222,6 +3721,7 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                     recurrence == RecurrenceType.MONTHLY_DAYS && monthly.isEmpty() -> "Inserisci almeno un giorno del mese valido (1–31)."
                     packageDurationMode == PackageDurationMode.DAYS && pDays < 1 -> "La durata della confezione deve essere almeno 1 giorno."
                     packageDurationMode == PackageDurationMode.INTAKES && pIntakes < 1 -> "Il numero di assunzioni per confezione deve essere almeno 1."
+                    stockReminderMode != StockReminderMode.NONE && stockThreshold < 0 -> "La soglia del reminder scorta deve essere 0 o superiore."
                     snooze < 1 -> "Lo snooze deve essere almeno 1 minuto."
                     countdownEnabled && c < 1 -> "Il countdown deve durare almeno 1 minuto."
                     else -> null
@@ -3251,6 +3751,8 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                             lastPackageChangeEpochDay = initial?.lastPackageChangeEpochDay,
                             lastPackageChangeMillis = initial?.lastPackageChangeMillis,
                             stockCount = initial?.stockCount,
+                            stockReminderMode = stockReminderMode,
+                            stockReminderThreshold = if (stockReminderMode == StockReminderMode.NONE) 0 else stockThreshold.coerceAtLeast(0),
                             countdownEnabled = countdownEnabled,
                             countdownMinutes = if (countdownEnabled) c else 0,
                             countdownNote = if (countdownEnabled) countdownNote.trim() else "",
