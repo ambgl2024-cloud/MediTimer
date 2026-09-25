@@ -232,6 +232,11 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.7.2" to listOf(
+                "Corretto il calcolo dei periodi critici nelle statistiche Storia.",
+                "Le assunzioni future del giorno, della settimana o del mese in corso non vengono considerate come non effettuate.",
+                "Le statistiche considerano un farmaco solo nei periodi in cui risultava realmente attivo e previsto dalla ricorrenza."
+            ),
             "0.7.1" to listOf(
                 "Aggiunto Reminder scorta configurabile: Nessuno, Punto di riordino o Tempo residuo.",
                 "Il reminder genera un avviso persistente in Oggi, una notifica Android iniziale e un promemoria settimanale finché resta attivo.",
@@ -1343,7 +1348,7 @@ private fun HistoryKpiFilteredContent(
         doseObservations(periods, intakes, rangeStartMillis, rangeEndMillis, now)
     }
     val timing = remember(observations) { timingSlotStats(observations) }
-    val critical = remember(observations) { criticalPeriods(observations) }
+    val critical = remember(observations, now) { criticalPeriods(observations, now) }
 
     Card {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

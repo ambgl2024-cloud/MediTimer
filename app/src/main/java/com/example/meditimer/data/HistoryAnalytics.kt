@@ -67,12 +67,29 @@ fun doseObservations(
         .associateBy { it.key }
     val observations = mutableListOf<DoseObservation>()
 
+    // Statistics must describe only doses that were actually due at the instant
+    // of the calculation. A selected week/month may extend into the future, but
+    // future doses must never become missed doses.
+    val evaluationEndExclusive = minOf(
+        rangeEndMillisExclusive,
+        if (nowMillis == Long.MAX_VALUE) Long.MAX_VALUE else nowMillis + 1
+    )
+    if (evaluationEndExclusive <= rangeStartMillis) return emptyList()
+
     periods.asSequence()
         .filter { medicationId == null || it.medicationId == medicationId }
         .forEach { period ->
+            // Disabled therapy periods generate no expected doses.
             if (!period.snapshot.enabled) return@forEach
+
+            // Intersect the selected range with the exact historical period in which
+            // this medication configuration was active. This prevents days before
+            // activation or after suspension/deletion from lowering adherence.
             val start = maxOf(period.startMillis, rangeStartMillis)
-            val end = minOf(period.endMillisExclusive ?: rangeEndMillisExclusive, rangeEndMillisExclusive, nowMillis + 1)
+            val end = minOf(
+                period.endMillisExclusive ?: evaluationEndExclusive,
+                evaluationEndExclusive
+            )
             if (end <= start) return@forEach
 
             var date = Instant.ofEpochMilli(start).atZone(zone).toLocalDate()
@@ -82,7 +99,10 @@ fun doseObservations(
                     period.snapshot.alarmTimes.forEach { timeText ->
                         val time = runCatching { LocalTime.parse(timeText, format) }.getOrNull() ?: return@forEach
                         val plannedMillis = LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli()
-                        if (plannedMillis >= start && plannedMillis < end && plannedMillis <= nowMillis) {
+
+                        // plannedMillis < end is the only eligibility rule needed here:
+                        // end is already capped at now + 1 ms and at the therapy-period end.
+                        if (plannedMillis >= start && plannedMillis < end) {
                             val canonical = time.format(format)
                             val key = "${period.medicationId}|${date.toEpochDay()}|$canonical"
                             observations += DoseObservation(
@@ -154,7 +174,15 @@ private fun chooseWorst(groups: List<ProblemGroupStats>): ProblemGroupStats? {
     }
 }
 
-fun criticalPeriods(observations: List<DoseObservation>): CriticalPeriods {
+fun criticalPeriods(
+    observations: List<DoseObservation>,
+    nowMillis: Long = System.currentTimeMillis()
+): CriticalPeriods {
+    // Defensive cutoff: critical-period statistics only use doses whose scheduled
+    // time has already arrived. This keeps partial days/weeks/months comparable
+    // without treating their future remainder as missed.
+    val dueObservations = observations.filter { it.plannedMillis <= nowMillis }
+
     val weekdayNames = mapOf(
         DayOfWeek.MONDAY to "Lunedì",
         DayOfWeek.TUESDAY to "Martedì",
@@ -164,15 +192,15 @@ fun criticalPeriods(observations: List<DoseObservation>): CriticalPeriods {
         DayOfWeek.SATURDAY to "Sabato",
         DayOfWeek.SUNDAY to "Domenica"
     )
-    val weekdays = observations.groupBy { it.date.dayOfWeek }
+    val weekdays = dueObservations.groupBy { it.date.dayOfWeek }
         .map { (key, values) -> aggregateProblemGroup(weekdayNames[key] ?: key.name, values) }
 
-    val weeks = observations.groupBy { it.date.minusDays((it.date.dayOfWeek.value - 1).toLong()) }
+    val weeks = dueObservations.groupBy { it.date.minusDays((it.date.dayOfWeek.value - 1).toLong()) }
         .map { (start, values) ->
             aggregateProblemGroup("${start.format(DateTimeFormatter.ofPattern("dd/MM"))}–${start.plusDays(6).format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))}", values)
         }
 
-    val months = observations.groupBy { YearMonth.from(it.date) }
+    val months = dueObservations.groupBy { YearMonth.from(it.date) }
         .map { (month, values) ->
             aggregateProblemGroup(month.format(DateTimeFormatter.ofPattern("MM/yyyy")), values)
         }

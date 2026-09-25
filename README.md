@@ -1,3 +1,11 @@
+# MediTimer v0.7.2
+
+Correzione mirata delle statistiche Storia / periodi critici:
+- una dose viene considerata prevista solo dopo il suo orario effettivo;
+- il resto della giornata, settimana o mese ancora futuro non peggiora la regolarità;
+- giorni precedenti all'attivazione e successivi a sospensione/eliminazione non vengono conteggiati;
+- nessun'altra funzione dell'app è stata modificata.
+
 # MediTimer v0.7.1
 
 Modifiche richieste:
