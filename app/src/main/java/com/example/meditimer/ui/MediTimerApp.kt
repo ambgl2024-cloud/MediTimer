@@ -23,8 +23,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.app.NotificationManagerCompat
 import com.example.meditimer.data.*
+import com.example.meditimer.notifications.AlarmPlaybackService
 import com.example.meditimer.notifications.NotificationHelper
 import com.example.meditimer.notifications.Scheduler
 import kotlinx.coroutines.delay
@@ -232,6 +232,14 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.7.3" to listOf(
+                "Aggiunto promemoria silenzioso un'ora prima di ogni assunzione, con azione Farmaco assunto.",
+                "All'orario previsto parte una vera sveglia con suoneria sveglia di sistema, vibrazione e schermata ad alta priorità se il farmaco non è già stato assunto.",
+                "La sveglia suona per massimo 2 minuti e, se non viene gestita, riparte automaticamente dopo lo snooze configurato.",
+                "Dopo Farmaco assunto non viene mostrata alcuna notifica Android di conferma.",
+                "Le assunzioni non effettuate restano pending in cima a Oggi anche dopo mezzanotte, fino alla successiva assunzione programmata dello stesso farmaco.",
+                "Il countdown post-assunzione è ora flottante e non sposta più verso il basso l'elenco delle assunzioni."
+            ),
             "0.7.2" to listOf(
                 "Corretto il calcolo dei periodi critici nelle statistiche Storia.",
                 "Le assunzioni future del giorno, della settimana o del mese in corso non vengono considerate come non effettuate.",
@@ -602,6 +610,55 @@ private fun ScreenColumn(content: @Composable ColumnScope.() -> Unit) {
     )
 }
 
+private data class DoseOccurrence(
+    val medication: Medication,
+    val date: LocalDate,
+    val time: String,
+    val plannedMillis: Long
+) {
+    val key: String get() = "${medication.id}|${date.toEpochDay()}|$time"
+}
+
+private fun medicationCreationMillis(medication: Medication, now: Long): Long {
+    // Medication IDs created by MediTimer are epoch milliseconds. Use them to avoid
+    // inventing pending doses from before the medication existed.
+    val plausibleStart = LocalDate.of(2020, 1, 1)
+        .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    return medication.id.takeIf { it in plausibleStart..(now + 86_400_000L) }
+        ?: LocalDate.ofEpochDay(medication.anchorEpochDay)
+            .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+}
+
+private fun latestPendingOccurrence(
+    medication: Medication,
+    repo: MedicationRepository,
+    now: Long
+): DoseOccurrence? {
+    if (!medication.enabled) return null
+    val zone = ZoneId.systemDefault()
+    val nowDateTime = Instant.ofEpochMilli(now).atZone(zone)
+    val creationMillis = medicationCreationMillis(medication, now)
+    var date = nowDateTime.toLocalDate()
+
+    repeat(400) {
+        if (medication.isActiveOn(date)) {
+            val candidates = medication.alarmTimes.mapNotNull { time ->
+                val localTime = runCatching { LocalTime.parse(time) }.getOrNull() ?: return@mapNotNull null
+                val millis = date.atTime(localTime).atZone(zone).toInstant().toEpochMilli()
+                if (millis <= now && millis >= creationMillis) {
+                    DoseOccurrence(medication, date, time, millis)
+                } else null
+            }
+            val latest = candidates.maxByOrNull { it.plannedMillis }
+            if (latest != null) {
+                return if (repo.isTaken(medication.id, date.toEpochDay(), latest.time)) null else latest
+            }
+        }
+        date = date.minusDays(1)
+    }
+    return null
+}
+
 @Composable
 private fun TodayScreen(
     meds: List<Medication>,
@@ -613,144 +670,239 @@ private fun TodayScreen(
     countdowns: List<ActiveCountdown>
 ) {
     val context = LocalContext.current
-    val today = remember(now) { Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate() }
-    val doses = remember(meds, today, revision) {
+    val zone = ZoneId.systemDefault()
+    val today = remember(now) { Instant.ofEpochMilli(now).atZone(zone).toLocalDate() }
+    val minuteBucket = now / 60_000L
+    var showCountdownDetails by remember { mutableStateOf(false) }
+
+    val pendingDoses = remember(meds, revision, minuteBucket) {
+        meds.mapNotNull { latestPendingOccurrence(it, repo, now) }
+            .sortedBy { it.plannedMillis }
+    }
+    val pendingKeys = remember(pendingDoses) { pendingDoses.mapTo(mutableSetOf()) { it.key } }
+
+    val doses = remember(meds, today, revision, minuteBucket, pendingKeys) {
         meds.filter { it.isActiveOn(today) }
-            .flatMap { med -> med.alarmTimes.map { time -> med to time } }
+            .flatMap { med ->
+                val creationMillis = medicationCreationMillis(med, now)
+                med.alarmTimes.mapNotNull { time ->
+                    val parsed = runCatching { LocalTime.parse(time) }.getOrNull() ?: return@mapNotNull null
+                    val plannedMillis = today.atTime(parsed).atZone(zone).toInstant().toEpochMilli()
+                    val key = "${med.id}|${today.toEpochDay()}|$time"
+                    if (plannedMillis >= creationMillis && key !in pendingKeys) med to time else null
+                }
+            }
             .sortedBy { it.second }
     }
 
-    ScreenColumn {
-        Text("Oggi", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text(today.itDate(), style = MaterialTheme.typography.bodyLarge)
+    Box(Modifier.fillMaxSize()) {
+        ScreenColumn {
+            Text("Oggi", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text(today.itDate(), style = MaterialTheme.typography.bodyLarge)
 
-        if (!Scheduler.canScheduleExact(context)) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Allarmi precisi non abilitati", fontWeight = FontWeight.Bold)
-                    Text("Android può ritardare i promemoria. Abilita gli allarmi precisi per avere orari affidabili.")
-                    Button(onClick = requestExactAlarmPermission) { Text("Abilita") }
-                }
-            }
-        }
-
-        val packageAttention = meds.mapNotNull { med ->
-            val dayRemaining = if (med.packageDurationMode == PackageDurationMode.DAYS) {
-                med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
-                    ?.plusDays(med.packageMaxDays.toLong())
-                    ?.toEpochDay()?.minus(today.toEpochDay())
-            } else null
-            val intakeRemaining = if (med.packageDurationMode == PackageDurationMode.INTAKES) repo.getPackageIntakesRemaining(med) else null
-            val messages = buildList {
-                if (dayRemaining != null && dayRemaining <= 7L) {
-                    add(when {
-                        dayRemaining > 1 -> "${med.name}: cambio confezione tra $dayRemaining giorni"
-                        dayRemaining == 1L -> "${med.name}: cambio confezione domani"
-                        dayRemaining == 0L -> "${med.name}: cambio confezione oggi"
-                        dayRemaining == -1L -> "${med.name}: cambio confezione scaduto da 1 giorno"
-                        else -> "${med.name}: cambio confezione scaduto da ${-dayRemaining} giorni"
-                    })
-                }
-                if (intakeRemaining != null && intakeRemaining <= 7) {
-                    add(when {
-                        intakeRemaining > 1 -> "${med.name}: restano $intakeRemaining assunzioni prima del cambio"
-                        intakeRemaining == 1 -> "${med.name}: resta 1 assunzione prima del cambio"
-                        intakeRemaining == 0 -> "${med.name}: numero massimo di assunzioni raggiunto — cambia confezione"
-                        intakeRemaining == -1 -> "${med.name}: durata superata di 1 assunzione"
-                        else -> "${med.name}: durata superata di ${-intakeRemaining} assunzioni"
-                    })
-                }
-                val stockReminder = evaluateStockReminder(med, repo, today)
-                if (stockReminder.active) add(stockReminder.message)
-            }
-            messages.takeIf { it.isNotEmpty() }
-        }.flatten()
-
-        if (packageAttention.isNotEmpty()) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Warning, contentDescription = null)
-                        Text("Attenzione confezioni e scorte", fontWeight = FontWeight.Bold)
-                    }
-                    packageAttention.forEach { Text("• $it") }
-                }
-            }
-        }
-
-        if (countdowns.isNotEmpty()) {
-            Text("Countdown attivi", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            countdowns.forEach { c ->
-                val remaining = max(0L, c.endMillis - now)
-                val min = remaining / 60_000
-                val sec = (remaining % 60_000) / 1_000
-                Card {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(c.medicationName, fontWeight = FontWeight.Bold)
-                        Text(String.format("%02d:%02d", min, sec), style = MaterialTheme.typography.headlineMedium)
-                        if (c.note.isNotBlank()) Text(c.note)
-                        Text("Fine alle ${millisToTime(c.endMillis)}", style = MaterialTheme.typography.bodySmall)
+            if (!Scheduler.canScheduleExact(context)) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Allarmi precisi non abilitati", fontWeight = FontWeight.Bold)
+                        Text("Android può ritardare i promemoria. Abilita gli allarmi precisi per avere orari affidabili.")
+                        Button(onClick = requestExactAlarmPermission) { Text("Abilita") }
                     }
                 }
             }
-        }
 
-        Text("Assunzioni", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        if (doses.isEmpty()) Text("Nessuna assunzione programmata per oggi.")
-        doses.forEach { (med, time) ->
-            val taken = repo.isTaken(med.id, today.toEpochDay(), time)
-            Card {
-                Row(
-                    Modifier.fillMaxWidth().padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("$time · ${med.name}", fontWeight = FontWeight.Bold)
-                        if (med.doseNote.isNotBlank()) Text(med.doseNote)
-                        if (med.countdownEnabled && med.countdownMinutes > 0)
-                            Text("Dopo: countdown ${med.countdownMinutes}min", style = MaterialTheme.typography.bodySmall)
+            val packageAttention = meds.mapNotNull { med ->
+                val dayRemaining = if (med.packageDurationMode == PackageDurationMode.DAYS) {
+                    med.lastPackageChangeEpochDay?.let(LocalDate::ofEpochDay)
+                        ?.plusDays(med.packageMaxDays.toLong())
+                        ?.toEpochDay()?.minus(today.toEpochDay())
+                } else null
+                val intakeRemaining = if (med.packageDurationMode == PackageDurationMode.INTAKES) repo.getPackageIntakesRemaining(med) else null
+                val messages = buildList {
+                    if (dayRemaining != null && dayRemaining <= 7L) {
+                        add(when {
+                            dayRemaining > 1 -> "${med.name}: cambio confezione tra $dayRemaining giorni"
+                            dayRemaining == 1L -> "${med.name}: cambio confezione domani"
+                            dayRemaining == 0L -> "${med.name}: cambio confezione oggi"
+                            dayRemaining == -1L -> "${med.name}: cambio confezione scaduto da 1 giorno"
+                            else -> "${med.name}: cambio confezione scaduto da ${-dayRemaining} giorni"
+                        })
                     }
-                    if (taken) {
-                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            AssistChip(
-                                onClick = {},
-                                label = { Text("Assunto") },
-                                leadingIcon = { Icon(Icons.Default.Check, null) }
-                            )
-                            OutlinedButton(onClick = {
-                                markNotTaken(context, repo, med, today.toEpochDay(), time)
-                                refresh()
-                            }) { Text("Non assunto") }
+                    if (intakeRemaining != null && intakeRemaining <= 7) {
+                        add(when {
+                            intakeRemaining > 1 -> "${med.name}: restano $intakeRemaining assunzioni prima del cambio"
+                            intakeRemaining == 1 -> "${med.name}: resta 1 assunzione prima del cambio"
+                            intakeRemaining == 0 -> "${med.name}: numero massimo di assunzioni raggiunto — cambia confezione"
+                            intakeRemaining == -1 -> "${med.name}: durata superata di 1 assunzione"
+                            else -> "${med.name}: durata superata di ${-intakeRemaining} assunzioni"
+                        })
+                    }
+                    val stockReminder = evaluateStockReminder(med, repo, today)
+                    if (stockReminder.active) add(stockReminder.message)
+                }
+                messages.takeIf { it.isNotEmpty() }
+            }.flatten()
+
+            if (packageAttention.isNotEmpty()) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.Warning, contentDescription = null)
+                            Text("Attenzione confezioni e scorte", fontWeight = FontWeight.Bold)
                         }
-                    } else {
-                        Button(onClick = {
-                            markTaken(context, repo, med, today.toEpochDay(), time)
-                            refresh()
-                        }) { Text("Assunto") }
+                        packageAttention.forEach { Text("• $it") }
+                    }
+                }
+            }
+
+            if (pendingDoses.isNotEmpty()) {
+                Text("Da assumere", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                pendingDoses.forEach { occurrence ->
+                    val med = occurrence.medication
+                    val dateLabel = when (occurrence.date) {
+                        today -> "Oggi"
+                        today.minusDays(1) -> "Ieri"
+                        else -> occurrence.date.itDate()
+                    }
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("$dateLabel · ${occurrence.time} · ${med.name}", fontWeight = FontWeight.Bold)
+                                Text("Assunzione in ritardo", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                if (med.doseNote.isNotBlank()) Text(med.doseNote)
+                            }
+                            Button(onClick = {
+                                markTaken(context, repo, med, occurrence.date.toEpochDay(), occurrence.time)
+                                refresh()
+                            }) { Text("Assunto") }
+                        }
+                    }
+                }
+            }
+
+            Text("Assunzioni", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            if (doses.isEmpty() && pendingDoses.isEmpty()) Text("Nessuna assunzione programmata per oggi.")
+            doses.forEach { (med, time) ->
+                val taken = repo.isTaken(med.id, today.toEpochDay(), time)
+                Card {
+                    Row(
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("$time · ${med.name}", fontWeight = FontWeight.Bold)
+                            if (med.doseNote.isNotBlank()) Text(med.doseNote)
+                            if (med.countdownEnabled && med.countdownMinutes > 0)
+                                Text("Dopo: countdown ${med.countdownMinutes}min", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (taken) {
+                            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                AssistChip(
+                                    onClick = {},
+                                    label = { Text("Assunto") },
+                                    leadingIcon = { Icon(Icons.Default.Check, null) }
+                                )
+                                OutlinedButton(onClick = {
+                                    markNotTaken(context, repo, med, today.toEpochDay(), time)
+                                    refresh()
+                                }) { Text("Non assunto") }
+                            }
+                        } else {
+                            Button(onClick = {
+                                markTaken(context, repo, med, today.toEpochDay(), time)
+                                refresh()
+                            }) { Text("Assunto") }
+                        }
                     }
                 }
             }
         }
+
+        // Floating countdown: it does not participate in the Column layout, so starting a
+        // countdown never shifts the medication list downward.
+        if (countdowns.isNotEmpty()) {
+            val current = countdowns.first()
+            val remaining = max(0L, current.endMillis - now)
+            val min = remaining / 60_000
+            val sec = (remaining % 60_000) / 1_000
+            Surface(
+                onClick = { showCountdownDetails = true },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 14.dp)
+                    .widthIn(min = 132.dp, max = 220.dp),
+                shape = MaterialTheme.shapes.extraLarge,
+                tonalElevation = 6.dp,
+                shadowElevation = 4.dp,
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(current.medicationName, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(String.format("%02d:%02d", min, sec), fontWeight = FontWeight.Bold)
+                    }
+                    if (countdowns.size > 1) Text("+${countdowns.size - 1}", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+
+    if (showCountdownDetails) {
+        AlertDialog(
+            onDismissRequest = { showCountdownDetails = false },
+            title = { Text("Countdown attivi") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    countdowns.forEach { c ->
+                        val remaining = max(0L, c.endMillis - now)
+                        val min = remaining / 60_000
+                        val sec = (remaining % 60_000) / 1_000
+                        Column {
+                            Text(c.medicationName, fontWeight = FontWeight.Bold)
+                            Text(String.format("%02d:%02d", min, sec), style = MaterialTheme.typography.titleLarge)
+                            if (c.note.isNotBlank()) Text(c.note)
+                            Text("Fine alle ${millisToTime(c.endMillis)}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCountdownDetails = false }) { Text("Chiudi") }
+            }
+        )
     }
 }
 
 private fun markTaken(context: Context, repo: MedicationRepository, med: Medication, epochDay: Long, time: String) {
     val now = System.currentTimeMillis()
-    repo.recordIntake(
-        IntakeEvent(
-            medicationId = med.id,
-            medicationName = med.name,
-            plannedEpochDay = epochDay,
-            plannedTime = time,
-            takenAtMillis = now
+    if (!repo.isTaken(med.id, epochDay, time)) {
+        repo.recordIntake(
+            IntakeEvent(
+                medicationId = med.id,
+                medicationName = med.name,
+                plannedEpochDay = epochDay,
+                plannedTime = time,
+                takenAtMillis = now
+            )
         )
-    )
+    }
+    AlarmPlaybackService.stop(context)
+    com.example.meditimer.AlarmActivity.requestClose(context)
+    Scheduler.cancelSnooze(context, med.id, epochDay, time)
+    NotificationHelper.cancelDoseNotifications(context, med.id, epochDay, time)
     Scheduler.scheduleNextPackageReminder(context, med)
     Scheduler.scheduleNextStockReminder(context, repo.getMedication(med.id) ?: med)
-    Scheduler.cancelSnooze(context, med.id, epochDay, time)
-    NotificationManagerCompat.from(context).cancel(NotificationHelper.notificationId(med.id, time))
-    if (med.countdownEnabled && med.countdownMinutes > 0) {
+
+    if (med.countdownEnabled && med.countdownMinutes > 0 && repo.getCountdownsForIntake(med.id, epochDay, time).isEmpty()) {
         val c = ActiveCountdown(
             id = now + med.id,
             medicationId = med.id,
@@ -764,6 +916,7 @@ private fun markTaken(context: Context, repo: MedicationRepository, med: Medicat
         repo.addCountdown(c)
         Scheduler.scheduleCountdown(context, c)
     }
+    // No Android confirmation notification is created after "Assunto".
 }
 
 private fun markNotTaken(context: Context, repo: MedicationRepository, med: Medication, epochDay: Long, time: String) {

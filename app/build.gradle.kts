@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.meditimer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.7.2"
+        versionCode = 27
+        versionName = "0.7.3"
     }
 
     signingConfigs {

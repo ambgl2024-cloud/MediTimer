@@ -1,4 +1,4 @@
-MEDITIMER v0.6.0 — UPLOAD GITHUB
+MEDITIMER v0.7.3 — UPLOAD GITHUB
 
 1. Estrai tutto lo ZIP.
 2. Entra nella cartella estratta e carica IL CONTENUTO nella root del repository MediTimer.
@@ -8,26 +8,22 @@ MEDITIMER v0.6.0 — UPLOAD GITHUB
 6. Fai Commit changes e attendi GitHub Actions.
 7. Scarica l'artifact MediTimer-APK e installa app-release.apk.
 
-Versione: 0.6.0
-VersionCode: 14
+Versione: 0.7.3
+VersionCode: 27
 
-NUOVA GESTIONE SCORTE
-- In Confezioni, imposta la scorta reale per ciascun farmaco.
-- La scorta conta solo le confezioni chiuse di riserva; quella in uso non è inclusa.
-- Cambiata oggi / Cambio altra data: consuma automaticamente 1 confezione dalla scorta.
-- + Acquisto: aumenta la scorta della quantità inserita.
-- - Scarto: riduce la scorta per confezioni scadute/eliminate.
-- Imposta: corregge direttamente il numero reale di confezioni disponibili.
-- Correggi solo la data: modifica la data della confezione in uso senza toccare la scorta.
+NOVITÀ v0.7.3
+- Promemoria Android silenzioso 1 ora prima dell'assunzione, con pulsante Farmaco assunto.
+- All'orario previsto, se la dose non è stata assunta, parte una sveglia completa con suoneria sveglia di sistema.
+- Suono massimo 2 minuti; se non viene gestita, riparte automaticamente dopo lo snooze configurato.
+- Snooze e Farmaco assunto sono disponibili dalla notifica/sveglia.
+- Nessuna notifica Android di conferma dopo Farmaco assunto.
+- Le dosi non assunte restano pending in cima a Oggi anche dopo mezzanotte, fino alla dose successiva dello stesso farmaco.
+- Countdown in Oggi flottante: non sposta più l'elenco delle assunzioni.
 
-AVVISI
-- Cambio confezione: notifica quotidiana dalle 09:00 a partire da 7 giorni prima della scadenza, fino al cambio registrato.
-- Scorta: quando resta 1 confezione o 0, avviso immediato e poi promemoria quotidiano finché la scorta non viene ripristinata sopra 1.
-- Gli stessi avvisi sono visibili anche nelle schermate Oggi e Confezioni.
+NOTA ANDROID
+- Per la puntualità è necessario consentire gli allarmi precisi.
+- La schermata a tutto schermo usa la funzione Android Full Screen Intent per gli allarmi; Android può applicare le proprie autorizzazioni di sistema.
+- Un Arresto forzato (Force stop) da Impostazioni Android blocca gli allarmi dell'app finché non viene riaperta.
 
 COUNTDOWN
-- Il comportamento funzionante della v0.5.6 è invariato: countdown persistente e doppio bip finale personalizzato.
-
-NOTA
-- Per i farmaci già esistenti, la scorta appare come “da impostare”: è intenzionale per non assumere erroneamente che sia zero.
-- Un Arresto forzato (Force stop) da Impostazioni Android blocca gli allarmi dell'app finché non viene riaperta.
+- Il comportamento funzionante del countdown e il doppio bip finale personalizzato restano invariati.

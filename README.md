@@ -1,3 +1,19 @@
+# MediTimer v0.7.3
+
+Modifiche richieste alle assunzioni e alle sveglie:
+- notifica silenziosa 1 ora prima dell'orario previsto, con azione `Farmaco assunto`;
+- all'orario previsto, se la dose non è già registrata, vera sveglia Android con suoneria di sistema e vibrazione;
+- sveglia a schermo intero quando Android lo consente, con `Farmaco assunto` e `Snooze`;
+- durata massima del suono: 2 minuti;
+- se non viene premuto nulla, nuova sveglia automatica dopo lo snooze configurato;
+- premendo Snooze, il nuovo intervallo decorre dal momento del tap;
+- dopo `Farmaco assunto` non viene generata alcuna notifica Android di conferma;
+- una dose notturna non assunta resta pending in `Oggi` anche dopo mezzanotte e viene mantenuta fino all'orario della successiva dose dello stesso farmaco;
+- quando arriva la dose successiva, la precedente smette di essere pending ed è trattata dalle statistiche come non assunta;
+- countdown `Oggi` reso flottante, senza spostare l'elenco delle assunzioni.
+
+Le logiche di scorte, Storia, reminder riacquisto e doppio bip del countdown non sono state modificate.
+
 # MediTimer v0.7.2
 
 Correzione mirata delle statistiche Storia / periodi critici:

@@ -13,27 +13,56 @@ class AlarmReceiver : BroadcastReceiver() {
         val time = intent.getStringExtra(EXTRA_TIME) ?: return
         val repo = MedicationRepository(context)
         val med = repo.getMedication(medId) ?: return
-        val isSnooze = intent.getBooleanExtra(EXTRA_IS_SNOOZE, false) || intent.action == ACTION_SNOOZE_ALARM
         val now = System.currentTimeMillis()
         val fallbackDate = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
         val plannedEpochDay = intent.getLongExtra(EXTRA_EPOCH_DAY, fallbackDate.toEpochDay())
 
-        if (isSnooze) {
-            repo.removePendingSnooze(medId, plannedEpochDay, time)
-            if (med.enabled && !repo.isTaken(med.id, plannedEpochDay, time)) {
-                NotificationHelper.showMedicationAlarm(context, med, plannedEpochDay, time, now)
+        when (intent.action) {
+            ACTION_PRE_REMINDER -> {
+                if (
+                    med.enabled &&
+                    med.alarmTimes.contains(time) &&
+                    !repo.isTaken(med.id, plannedEpochDay, time)
+                ) {
+                    NotificationHelper.showMedicationPreReminder(context, med, plannedEpochDay, time)
+                }
             }
-            return
-        }
 
-        if (!med.enabled || !med.alarmTimes.contains(time)) return
-        if (!repo.isTaken(med.id, plannedEpochDay, time)) {
-            NotificationHelper.showMedicationAlarm(context, med, plannedEpochDay, time, now)
+            ACTION_SNOOZE_ALARM -> {
+                repo.removePendingSnooze(medId, plannedEpochDay, time)
+                if (med.enabled && !repo.isTaken(med.id, plannedEpochDay, time)) {
+                    // Ignoring the alarm behaves like an automatic snooze: every alarm
+                    // occurrence immediately schedules the next retry.
+                    Scheduler.scheduleSnooze(context, medId, plannedEpochDay, time, med.snoozeMinutes)
+                    AlarmPlaybackService.start(context, medId, plannedEpochDay, time)
+                } else {
+                    NotificationHelper.cancelDoseNotifications(context, medId, plannedEpochDay, time)
+                }
+            }
+
+            else -> {
+                if (!med.enabled || !med.alarmTimes.contains(time)) return
+
+                // The previous pending dose of the same medication becomes definitively
+                // missed when the next scheduled dose is reached.
+                Scheduler.cancelOlderDoseRepeats(context, medId, plannedEpochDay, time)
+
+                if (!repo.isTaken(med.id, plannedEpochDay, time)) {
+                    Scheduler.scheduleSnooze(context, medId, plannedEpochDay, time, med.snoozeMinutes)
+                    AlarmPlaybackService.start(context, medId, plannedEpochDay, time)
+                } else {
+                    NotificationHelper.cancelDoseNotifications(context, medId, plannedEpochDay, time)
+                }
+
+                // Schedule the next regular occurrence (including its silent pre-reminder).
+                Scheduler.scheduleNextForSlot(context, med, time, afterMillis = now + 60_000)
+            }
         }
-        Scheduler.scheduleNextForSlot(context, med, time, afterMillis = now + 60_000)
     }
 
     companion object {
+        const val ACTION_MEDICATION_ALARM = "com.example.meditimer.MEDICATION_ALARM"
+        const val ACTION_PRE_REMINDER = "com.example.meditimer.PRE_REMINDER"
         const val ACTION_SNOOZE_ALARM = "com.example.meditimer.SNOOZE_ALARM"
         const val EXTRA_MED_ID = "med_id"
         const val EXTRA_TIME = "time"

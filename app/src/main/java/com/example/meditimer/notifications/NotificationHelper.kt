@@ -1,5 +1,6 @@
 package com.example.meditimer.notifications
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -9,36 +10,44 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.example.meditimer.AlarmActivity
 import com.example.meditimer.MainActivity
 import com.example.meditimer.R
 import com.example.meditimer.data.Medication
 import com.example.meditimer.data.PackageDurationMode
 
 object NotificationHelper {
-    const val CHANNEL_MED = "medication_alarm_v1"
+    const val CHANNEL_MED_PRE = "medication_prealert_v1"
+    const val CHANNEL_MED_ALARM = "medication_alarm_full_v2"
     const val CHANNEL_COUNTDOWN = "countdown_finish_visual_v5"
     const val CHANNEL_PACKAGE = "package_reminder_v1"
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
-        val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-        val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
         val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
         val notificationAttrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).build()
 
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_MED, "Promemoria farmaci", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Avvisi per le assunzioni programmate"
-                setSound(alarmUri, attrs)
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 500, 250, 500)
+            NotificationChannel(CHANNEL_MED_PRE, "Promemoria farmaco anticipato", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Promemoria silenzioso un'ora prima dell'assunzione"
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(true)
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_MED_ALARM, "Sveglie farmaci", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Sveglie per le assunzioni programmate"
+                // The actual system alarm ringtone and vibration are played by AlarmPlaybackService.
+                setSound(null, null)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
         )
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_COUNTDOWN, "Fine countdown", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Avvisi al termine dell'attesa dopo l'assunzione"
                 // The custom end-of-countdown bip is played by SoundHelper.
-                // Keep this channel silent to avoid the Android alarm ringtone playing as well.
                 setSound(null, null)
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 500, 250, 500)
@@ -58,64 +67,134 @@ object NotificationHelper {
         nm.deleteNotificationChannel("countdown_active_v1")
     }
 
-    fun showMedicationAlarm(
+    fun showMedicationPreReminder(
         context: Context,
         medication: Medication,
         plannedEpochDay: Long,
-        plannedTime: String,
-        occurrenceMillis: Long
+        plannedTime: String
     ) {
         ensureChannels(context)
         val openIntent = PendingIntent.getActivity(
             context,
-            medication.id.hashCode(),
+            ("pre-open:${medication.id}:$plannedEpochDay:$plannedTime").hashCode(),
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val takeIntent = Intent(context, ActionReceiver::class.java).apply {
-            action = ActionReceiver.ACTION_TAKEN
-            putExtra(ActionReceiver.EXTRA_MED_ID, medication.id)
-            putExtra(ActionReceiver.EXTRA_EPOCH_DAY, plannedEpochDay)
-            putExtra(ActionReceiver.EXTRA_TIME, plannedTime)
-            putExtra(ActionReceiver.EXTRA_NOTIFICATION_ID, notificationId(medication.id, plannedTime))
+        val takePending = actionPendingIntent(
+            context = context,
+            medication = medication,
+            plannedEpochDay = plannedEpochDay,
+            plannedTime = plannedTime,
+            action = ActionReceiver.ACTION_TAKEN,
+            notificationId = preReminderNotificationId(medication.id, plannedEpochDay, plannedTime),
+            salt = "pre-taken"
+        )
+        val body = buildString {
+            append("Alle $plannedTime dovrai assumere ${medication.name}")
+            if (medication.doseNote.isNotBlank()) append(" · ${medication.doseNote}")
         }
-        val takePending = PendingIntent.getBroadcast(
+        val n = NotificationCompat.Builder(context, CHANNEL_MED_PRE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Tra 1 ora · Farmaco da assumere")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setSilent(true)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent)
+            .addAction(0, "Farmaco assunto", takePending)
+            .build()
+        runCatching {
+            NotificationManagerCompat.from(context).notify(
+                preReminderNotificationId(medication.id, plannedEpochDay, plannedTime),
+                n
+            )
+        }
+    }
+
+    fun buildMedicationAlarmNotification(
+        context: Context,
+        medication: Medication,
+        plannedEpochDay: Long,
+        plannedTime: String
+    ): Notification {
+        ensureChannels(context)
+        val notificationId = alarmNotificationId(medication.id, plannedEpochDay, plannedTime)
+        val fullScreenIntent = PendingIntent.getActivity(
             context,
-            (medication.id.toString() + plannedTime + occurrenceMillis).hashCode(),
-            takeIntent,
+            ("alarm-screen:${medication.id}:$plannedEpochDay:$plannedTime").hashCode(),
+            AlarmActivity.intent(context, medication.id, plannedEpochDay, plannedTime),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val snoozeIntent = Intent(context, ActionReceiver::class.java).apply {
-            action = ActionReceiver.ACTION_SNOOZE
-            putExtra(ActionReceiver.EXTRA_MED_ID, medication.id)
-            putExtra(ActionReceiver.EXTRA_EPOCH_DAY, plannedEpochDay)
-            putExtra(ActionReceiver.EXTRA_TIME, plannedTime)
-            putExtra(ActionReceiver.EXTRA_NOTIFICATION_ID, notificationId(medication.id, plannedTime))
-        }
-        val snoozePending = PendingIntent.getBroadcast(
-            context,
-            ("snooze-action:${medication.id}:$plannedEpochDay:$plannedTime:$occurrenceMillis").hashCode(),
-            snoozeIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val takePending = actionPendingIntent(
+            context, medication, plannedEpochDay, plannedTime,
+            ActionReceiver.ACTION_TAKEN, notificationId, "alarm-taken"
+        )
+        val snoozePending = actionPendingIntent(
+            context, medication, plannedEpochDay, plannedTime,
+            ActionReceiver.ACTION_SNOOZE, notificationId, "alarm-snooze"
         )
         val body = buildString {
             append("È ora di assumere ${medication.name}")
             if (medication.doseNote.isNotBlank()) append(" · ${medication.doseNote}")
         }
-        val n = NotificationCompat.Builder(context, CHANNEL_MED)
+        return NotificationCompat.Builder(context, CHANNEL_MED_ALARM)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Farmaco da assumere")
+            .setContentTitle("Sveglia farmaco")
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setAutoCancel(true)
-            .setContentIntent(openIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setContentIntent(fullScreenIntent)
+            .setFullScreenIntent(fullScreenIntent, true)
             .addAction(0, "Farmaco assunto", takePending)
-            .addAction(0, "Rimanda ${medication.snoozeMinutes} min", snoozePending)
+            .addAction(0, "Snooze ${medication.snoozeMinutes} min", snoozePending)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(notificationId(medication.id, plannedTime), n) }
     }
+
+    private fun actionPendingIntent(
+        context: Context,
+        medication: Medication,
+        plannedEpochDay: Long,
+        plannedTime: String,
+        action: String,
+        notificationId: Int,
+        salt: String
+    ): PendingIntent {
+        val intent = Intent(context, ActionReceiver::class.java).apply {
+            this.action = action
+            putExtra(ActionReceiver.EXTRA_MED_ID, medication.id)
+            putExtra(ActionReceiver.EXTRA_EPOCH_DAY, plannedEpochDay)
+            putExtra(ActionReceiver.EXTRA_TIME, plannedTime)
+            putExtra(ActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            ("$salt:${medication.id}:$plannedEpochDay:$plannedTime").hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    fun cancelDoseNotifications(context: Context, medId: Long, plannedEpochDay: Long, plannedTime: String) {
+        val nm = NotificationManagerCompat.from(context)
+        nm.cancel(preReminderNotificationId(medId, plannedEpochDay, plannedTime))
+        nm.cancel(alarmNotificationId(medId, plannedEpochDay, plannedTime))
+        // Also clear the legacy notification id used by versions <= 0.7.2.
+        nm.cancel(notificationId(medId, plannedTime))
+    }
+
+    fun alarmNotificationId(medId: Long, plannedEpochDay: Long, time: String): Int =
+        ("med-alarm:$medId:$plannedEpochDay:$time").hashCode()
+
+    fun preReminderNotificationId(medId: Long, plannedEpochDay: Long, time: String): Int =
+        ("med-pre:$medId:$plannedEpochDay:$time").hashCode()
+
+    fun notificationId(medId: Long, time: String): Int = ("med:$medId:$time").hashCode()
 
     fun showCountdownFinished(context: Context, medicationName: String, note: String, countdownId: Long) {
         ensureChannels(context)
@@ -237,5 +316,4 @@ object NotificationHelper {
     private fun packageReminderNotificationId(medId: Long): Int = ("package-change:$medId").hashCode()
     private fun stockNotificationId(medId: Long): Int = ("package-stock:$medId").hashCode()
 
-    fun notificationId(medId: Long, time: String): Int = ("med:$medId:$time").hashCode()
 }

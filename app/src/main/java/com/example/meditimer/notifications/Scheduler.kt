@@ -19,6 +19,7 @@ import java.time.ZoneId
 
 object Scheduler {
     private const val PACKAGE_REMINDER_HOUR = 9
+    private const val PRE_REMINDER_MILLIS = 60 * 60 * 1000L
     fun canScheduleExact(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
         return context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
@@ -44,9 +45,23 @@ object Scheduler {
                 am.cancel(pi)
                 pi.cancel()
             }
+            legacyAlarmPendingIntent(context, medication.id, time, PendingIntent.FLAG_NO_CREATE)?.let { pi ->
+                am.cancel(pi)
+                pi.cancel()
+            }
+            preReminderPendingIntent(context, medication.id, time, PendingIntent.FLAG_NO_CREATE)?.let { pi ->
+                am.cancel(pi)
+                pi.cancel()
+            }
         }
         MedicationRepository(context).getPendingSnoozesForMedication(medication.id).forEach { snooze ->
             cancelSnooze(context, snooze.medicationId, snooze.plannedEpochDay, snooze.plannedTime)
+            NotificationHelper.cancelDoseNotifications(
+                context,
+                snooze.medicationId,
+                snooze.plannedEpochDay,
+                snooze.plannedTime
+            )
         }
         cancelPackageReminder(context, medication.id)
         cancelStockReminder(context, medication.id)
@@ -62,9 +77,42 @@ object Scheduler {
             if (medication.isActiveOn(date)) {
                 val candidate = LocalDateTime.of(date, parsed)
                 if (candidate.isAfter(after)) {
+                    val epochDay = date.toEpochDay()
                     val trigger = candidate.atZone(zone).toInstant().toEpochMilli()
-                    val pi = alarmPendingIntent(context, medication.id, time, PendingIntent.FLAG_UPDATE_CURRENT, date.toEpochDay()) ?: return
-                    scheduleAlarm(context, trigger, pi)
+
+                    // Migrate alarms scheduled by versions <= 0.7.2, whose PendingIntent
+                    // had no action. Without this cleanup an upgrade could fire both old
+                    // and new alarms once at the same time.
+                    legacyAlarmPendingIntent(
+                        context,
+                        medication.id,
+                        time,
+                        PendingIntent.FLAG_NO_CREATE
+                    )?.let { legacy ->
+                        context.getSystemService(AlarmManager::class.java).cancel(legacy)
+                        legacy.cancel()
+                    }
+
+                    val alarmPi = alarmPendingIntent(
+                        context,
+                        medication.id,
+                        time,
+                        PendingIntent.FLAG_UPDATE_CURRENT,
+                        epochDay
+                    ) ?: return
+                    scheduleMedicationAlarm(context, trigger, alarmPi)
+
+                    val preTrigger = trigger - PRE_REMINDER_MILLIS
+                    if (preTrigger > afterMillis) {
+                        val prePi = preReminderPendingIntent(
+                            context,
+                            medication.id,
+                            time,
+                            PendingIntent.FLAG_UPDATE_CURRENT,
+                            epochDay
+                        ) ?: return
+                        scheduleAlarm(context, preTrigger, prePi)
+                    }
                     return
                 }
             }
@@ -212,6 +260,32 @@ object Scheduler {
         MedicationRepository(context).removePendingSnooze(medicationId, plannedEpochDay, plannedTime)
     }
 
+    fun cancelOlderDoseRepeats(
+        context: Context,
+        medicationId: Long,
+        currentEpochDay: Long,
+        currentTime: String
+    ) {
+        val currentDateTime = runCatching {
+            LocalDateTime.of(LocalDate.ofEpochDay(currentEpochDay), LocalTime.parse(currentTime))
+        }.getOrNull() ?: return
+
+        MedicationRepository(context).getPendingSnoozesForMedication(medicationId).forEach { pending ->
+            val pendingDateTime = runCatching {
+                LocalDateTime.of(LocalDate.ofEpochDay(pending.plannedEpochDay), LocalTime.parse(pending.plannedTime))
+            }.getOrNull() ?: return@forEach
+            if (pendingDateTime.isBefore(currentDateTime)) {
+                cancelSnooze(context, pending.medicationId, pending.plannedEpochDay, pending.plannedTime)
+                NotificationHelper.cancelDoseNotifications(
+                    context,
+                    pending.medicationId,
+                    pending.plannedEpochDay,
+                    pending.plannedTime
+                )
+            }
+        }
+    }
+
     fun restoreSnoozes(context: Context) {
         val repo = MedicationRepository(context)
         val now = System.currentTimeMillis()
@@ -254,7 +328,7 @@ object Scheduler {
             snooze.plannedTime,
             PendingIntent.FLAG_UPDATE_CURRENT
         ) ?: return
-        scheduleAlarm(context, snooze.triggerAtMillis, pi)
+        scheduleMedicationAlarm(context, snooze.triggerAtMillis, pi)
     }
 
     private fun scheduleCountdownFinishFallback(context: Context, countdown: ActiveCountdown) {
@@ -267,6 +341,23 @@ object Scheduler {
         ) ?: return
         val triggerAt = maxOf(countdown.endMillis, System.currentTimeMillis() + 500L)
         scheduleAlarm(context, triggerAt, pi)
+    }
+
+    private fun scheduleMedicationAlarm(context: Context, trigger: Long, pi: PendingIntent) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        if (canScheduleExact(context)) {
+            // setAlarmClock is intended for user-visible alarm-clock style events and is
+            // allowed to wake the device even while idle.
+            val showIntent = PendingIntent.getActivity(
+                context,
+                "show-alarm-app".hashCode(),
+                Intent(context, com.example.meditimer.MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            am.setAlarmClock(AlarmManager.AlarmClockInfo(trigger, showIntent), pi)
+        } else {
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
+        }
     }
 
     private fun scheduleAlarm(context: Context, trigger: Long, pi: PendingIntent) {
@@ -363,6 +454,41 @@ object Scheduler {
         )
     }
 
+    private fun legacyAlarmPendingIntent(
+        context: Context,
+        medId: Long,
+        time: String,
+        baseFlag: Int
+    ): PendingIntent? {
+        val intent = Intent(context, AlarmReceiver::class.java).apply {
+            putExtra(AlarmReceiver.EXTRA_MED_ID, medId)
+            putExtra(AlarmReceiver.EXTRA_TIME, time)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            ("alarm:$medId:$time").hashCode(),
+            intent,
+            baseFlag or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun preReminderPendingIntent(
+        context: Context,
+        medId: Long,
+        time: String,
+        baseFlag: Int,
+        plannedEpochDay: Long? = null
+    ): PendingIntent? {
+        val intent = Intent(context, AlarmReceiver::class.java).apply {
+            action = AlarmReceiver.ACTION_PRE_REMINDER
+            putExtra(AlarmReceiver.EXTRA_MED_ID, medId)
+            putExtra(AlarmReceiver.EXTRA_TIME, time)
+            plannedEpochDay?.let { putExtra(AlarmReceiver.EXTRA_EPOCH_DAY, it) }
+        }
+        val flags = baseFlag or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getBroadcast(context, ("pre-alarm:$medId:$time").hashCode(), intent, flags)
+    }
+
     private fun alarmPendingIntent(
         context: Context,
         medId: Long,
@@ -371,6 +497,7 @@ object Scheduler {
         plannedEpochDay: Long? = null
     ): PendingIntent? {
         val intent = Intent(context, AlarmReceiver::class.java).apply {
+            action = AlarmReceiver.ACTION_MEDICATION_ALARM
             putExtra(AlarmReceiver.EXTRA_MED_ID, medId)
             putExtra(AlarmReceiver.EXTRA_TIME, time)
             plannedEpochDay?.let { putExtra(AlarmReceiver.EXTRA_EPOCH_DAY, it) }
@@ -378,4 +505,5 @@ object Scheduler {
         val flags = baseFlag or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getBroadcast(context, ("alarm:$medId:$time").hashCode(), intent, flags)
     }
+
 }
