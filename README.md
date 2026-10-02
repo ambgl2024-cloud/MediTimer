@@ -1,3 +1,12 @@
+# MediTimer v0.7.5
+
+Correzione richiesta:
+- `Farmaco assunto` da notifica Android o dalla sveglia continua a registrare la stessa dose e ad avviare l'eventuale countdown;
+- all'apertura automatica di MediTimer viene ora forzato anche il refresh dei dati;
+- la dose passa immediatamente a `Assunto` in `Oggi`;
+- l'evento appena registrato compare immediatamente nel `Calendario` e nelle statistiche `Storia`;
+- nessuna modifica a sveglie, snooze, countdown, scorte o altre funzioni.
+
 # MediTimer v0.7.4
 
 Correzioni richieste:

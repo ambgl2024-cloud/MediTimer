@@ -54,10 +54,17 @@ fun MediTimerApp(
         MedicationRepository(context).also { it.ensureTherapyHistoryBaselines() }
     }
     var tab by remember { mutableStateOf(AppTab.TODAY) }
-    LaunchedEffect(openTodayRequest) {
-        if (openTodayRequest > 0) tab = AppTab.TODAY
-    }
     var revision by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(openTodayRequest) {
+        if (openTodayRequest > 0) {
+            tab = AppTab.TODAY
+            // Assunto from an Android notification/alarm is saved before MainActivity
+            // opens. Force every cached screen (Oggi, Calendario, Storia) to reload the
+            // newly recorded IntakeEvent immediately.
+            revision++
+        }
+    }
     var editing by remember { mutableStateOf<Medication?>(null) }
     var creating by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
@@ -238,6 +245,11 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.7.5" to listOf(
+                "Corretto l'aggiornamento immediato dopo Farmaco assunto dalla notifica o dalla sveglia.",
+                "La dose risulta subito Assunta nella schermata Oggi e l'evento compare immediatamente nel Calendario e nelle statistiche Storia.",
+                "Nessuna modifica al funzionamento di sveglie, snooze o countdown."
+            ),
             "0.7.4" to listOf(
                 "Farmaco assunto dalla notifica o dalla sveglia apre automaticamente MediTimer nella schermata Oggi, mostrando l'eventuale countdown.",
                 "Se una dose viene registrata come assunta mentre è in snooze, ogni repeat pendente di quella dose viene annullato e non può ripresentarsi.",
