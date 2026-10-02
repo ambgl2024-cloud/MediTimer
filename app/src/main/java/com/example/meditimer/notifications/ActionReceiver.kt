@@ -4,8 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.example.meditimer.AlarmActivity
-import com.example.meditimer.data.ActiveCountdown
-import com.example.meditimer.data.IntakeEvent
 import com.example.meditimer.data.MedicationRepository
 
 class ActionReceiver : BroadcastReceiver() {
@@ -30,43 +28,26 @@ class ActionReceiver : BroadcastReceiver() {
             }
 
             ACTION_TAKEN -> {
-                AlarmPlaybackService.stop(context)
-                AlarmActivity.requestClose(context)
-                Scheduler.cancelSnooze(context, medId, epochDay, time)
-                NotificationHelper.cancelDoseNotifications(context, medId, epochDay, time)
+                DoseActionHandler.markTaken(context, medId, epochDay, time)
 
-                if (!repo.isTaken(medId, epochDay, time)) {
-                    val now = System.currentTimeMillis()
-                    repo.recordIntake(
-                        IntakeEvent(
-                            medicationId = medId,
-                            medicationName = med.name,
-                            plannedEpochDay = epochDay,
-                            plannedTime = time,
-                            takenAtMillis = now
-                        )
-                    )
-                    Scheduler.scheduleNextPackageReminder(context, med)
-                    Scheduler.scheduleNextStockReminder(context, repo.getMedication(med.id) ?: med)
-
-                    if (med.countdownEnabled && med.countdownMinutes > 0) {
-                        val countdown = ActiveCountdown(
-                            id = now + medId,
-                            medicationId = medId,
-                            medicationName = med.name,
-                            note = med.countdownNote,
-                            startMillis = now,
-                            endMillis = now + med.countdownMinutes * 60_000L,
-                            plannedEpochDay = epochDay,
-                            plannedTime = time
-                        )
-                        repo.addCountdown(countdown)
-                        Scheduler.scheduleCountdown(context, countdown)
-                    }
-                }
-                // Intentionally no "farmaco assunto" Android notification: the action
-                // only clears the dose reminders and records the intake.
+                // Legacy broadcast actions from already-posted notifications still try to
+                // open Oggi. New notifications use a direct Activity PendingIntent, which
+                // avoids Android's notification-trampoline restriction.
+                openToday(context)
             }
+        }
+    }
+
+    private fun openToday(context: Context) {
+        runCatching {
+            context.startActivity(
+                Intent(context, com.example.meditimer.MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    putExtra(com.example.meditimer.MainActivity.EXTRA_OPEN_TODAY, true)
+                }
+            )
         }
     }
 

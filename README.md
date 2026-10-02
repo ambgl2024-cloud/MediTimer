@@ -1,3 +1,11 @@
+# MediTimer v0.7.4
+
+Correzioni richieste:
+- `Farmaco assunto` dalla notifica preliminare o dalla sveglia apre automaticamente l'app su `Oggi`, così l'eventuale countdown è subito visibile.
+- Se una dose in snooze viene registrata come `Assunto` dall'app, il repeat pendente viene cancellato; `scheduleSnooze` ricontrolla inoltre lo stato della dose per evitare race condition.
+- Alla fine del countdown non viene più pubblicata alcuna notifica Android: restano esclusivamente il doppio bip personalizzato e la vibrazione.
+- Nessun'altra funzione è stata modificata.
+
 # MediTimer v0.7.3
 
 Modifiche richieste alle assunzioni e alle sveglie:

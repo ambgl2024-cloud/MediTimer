@@ -98,8 +98,16 @@ class AlarmActivity : ComponentActivity() {
 
                     Button(
                         onClick = {
-                            sendAction(ActionReceiver.ACTION_TAKEN)
-                            finishAndRemoveTask()
+                            val current = medication ?: return@Button
+                            startActivity(
+                                MainActivity.takenIntent(
+                                    this@AlarmActivity,
+                                    current.id,
+                                    plannedEpochDay,
+                                    plannedTime
+                                )
+                            )
+                            finish()
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {

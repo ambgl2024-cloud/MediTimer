@@ -45,12 +45,18 @@ private enum class AppTab(val label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MediTimerApp(requestExactAlarmPermission: () -> Unit) {
+fun MediTimerApp(
+    openTodayRequest: Int = 0,
+    requestExactAlarmPermission: () -> Unit
+) {
     val context = LocalContext.current
     val repo = remember {
         MedicationRepository(context).also { it.ensureTherapyHistoryBaselines() }
     }
     var tab by remember { mutableStateOf(AppTab.TODAY) }
+    LaunchedEffect(openTodayRequest) {
+        if (openTodayRequest > 0) tab = AppTab.TODAY
+    }
     var revision by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<Medication?>(null) }
     var creating by remember { mutableStateOf(false) }
@@ -232,6 +238,11 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.7.4" to listOf(
+                "Farmaco assunto dalla notifica o dalla sveglia apre automaticamente MediTimer nella schermata Oggi, mostrando l'eventuale countdown.",
+                "Se una dose viene registrata come assunta mentre è in snooze, ogni repeat pendente di quella dose viene annullato e non può ripresentarsi.",
+                "Alla fine del countdown vengono emessi solo il doppio bip e la vibrazione, senza notifica Android di fine countdown."
+            ),
             "0.7.3" to listOf(
                 "Aggiunto promemoria silenzioso un'ora prima di ogni assunzione, con azione Farmaco assunto.",
                 "All'orario previsto parte una vera sveglia con suoneria sveglia di sistema, vibrazione e schermata ad alta priorità se il farmaco non è già stato assunto.",

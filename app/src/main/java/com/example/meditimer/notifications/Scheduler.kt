@@ -245,9 +245,22 @@ object Scheduler {
         plannedTime: String,
         snoozeMinutes: Int
     ) {
+        val repo = MedicationRepository(context)
+
+        // A snooze receiver may be firing at the exact moment the user records Assunto
+        // from the app. Re-check the persisted intake here so that a completed dose can
+        // never create a fresh repeat after markTaken() has cancelled the old one.
+        if (repo.isTaken(medicationId, plannedEpochDay, plannedTime)) {
+            cancelSnooze(context, medicationId, plannedEpochDay, plannedTime)
+            NotificationHelper.cancelDoseNotifications(
+                context, medicationId, plannedEpochDay, plannedTime
+            )
+            return
+        }
+
         val trigger = System.currentTimeMillis() + snoozeMinutes.coerceAtLeast(1) * 60_000L
         val snooze = PendingSnooze(medicationId, plannedEpochDay, plannedTime, trigger)
-        MedicationRepository(context).upsertPendingSnooze(snooze)
+        repo.upsertPendingSnooze(snooze)
         scheduleSnoozeEvent(context, snooze)
     }
 

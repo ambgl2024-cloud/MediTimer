@@ -3,6 +3,8 @@ package com.example.meditimer.notifications
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.VibrationEffect
+import android.os.Vibrator
 import com.example.meditimer.data.MedicationRepository
 
 /**
@@ -21,27 +23,25 @@ class CountdownReceiver : BroadcastReceiver() {
 
         val appContext = context.applicationContext
         val repo = MedicationRepository(appContext)
-        val stored = repo.getCountdown(id)
-
-        val medicationName = stored?.medicationName
-            ?: intent.getStringExtra(EXTRA_MEDICATION_NAME)
-            ?: "Farmaco"
-        val note = stored?.note
-            ?: intent.getStringExtra(EXTRA_NOTE)
-            ?: ""
-
         // Remove persisted state immediately: the countdown has reached zero.
         repo.removeCountdown(id)
 
-        // Post the visual/vibration notification immediately. Its channel has no sound.
-        NotificationHelper.showCountdownFinished(appContext, medicationName, note, id)
+        // Do not post an Android notification when the countdown ends. The user requested
+        // only the audible double bip and vibration. Clear a possible legacy notification
+        // with the same id in case the app was updated while a countdown was active.
+        NotificationHelper.cancelCountdownFinished(appContext, id)
 
-        // Keep the broadcast alive while the short custom bip is played. This is the same
-        // custom final sound mechanism that worked in the earlier versions, but without the
-        // old minute-by-minute foreground service.
+        // Keep the broadcast alive while the short custom bip and vibration are played.
+        // This preserves the known-good final sound mechanism without publishing a
+        // notification or using a minute-by-minute foreground service.
         val pendingResult = goAsync()
         Thread {
             try {
+                runCatching {
+                    appContext.getSystemService(Vibrator::class.java)?.vibrate(
+                        VibrationEffect.createWaveform(longArrayOf(0, 500, 250, 500), -1)
+                    )
+                }
                 SoundHelper.playCountdownFinished(appContext)
             } finally {
                 pendingResult.finish()

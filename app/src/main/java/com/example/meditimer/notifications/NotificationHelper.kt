@@ -80,13 +80,11 @@ object NotificationHelper {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val takePending = actionPendingIntent(
+        val takePending = takenActivityPendingIntent(
             context = context,
             medication = medication,
             plannedEpochDay = plannedEpochDay,
             plannedTime = plannedTime,
-            action = ActionReceiver.ACTION_TAKEN,
-            notificationId = preReminderNotificationId(medication.id, plannedEpochDay, plannedTime),
             salt = "pre-taken"
         )
         val body = buildString {
@@ -127,9 +125,12 @@ object NotificationHelper {
             AlarmActivity.intent(context, medication.id, plannedEpochDay, plannedTime),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val takePending = actionPendingIntent(
-            context, medication, plannedEpochDay, plannedTime,
-            ActionReceiver.ACTION_TAKEN, notificationId, "alarm-taken"
+        val takePending = takenActivityPendingIntent(
+            context = context,
+            medication = medication,
+            plannedEpochDay = plannedEpochDay,
+            plannedTime = plannedTime,
+            salt = "alarm-taken"
         )
         val snoozePending = actionPendingIntent(
             context, medication, plannedEpochDay, plannedTime,
@@ -155,6 +156,21 @@ object NotificationHelper {
             .addAction(0, "Snooze ${medication.snoozeMinutes} min", snoozePending)
             .build()
     }
+
+    private fun takenActivityPendingIntent(
+        context: Context,
+        medication: Medication,
+        plannedEpochDay: Long,
+        plannedTime: String,
+        salt: String
+    ): PendingIntent = PendingIntent.getActivity(
+        context,
+        ("$salt:${medication.id}:$plannedEpochDay:$plannedTime").hashCode(),
+        com.example.meditimer.MainActivity.takenIntent(
+            context, medication.id, plannedEpochDay, plannedTime
+        ),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
 
     private fun actionPendingIntent(
         context: Context,
@@ -195,6 +211,10 @@ object NotificationHelper {
         ("med-pre:$medId:$plannedEpochDay:$time").hashCode()
 
     fun notificationId(medId: Long, time: String): Int = ("med:$medId:$time").hashCode()
+
+    fun cancelCountdownFinished(context: Context, countdownId: Long) {
+        NotificationManagerCompat.from(context).cancel(countdownId.hashCode())
+    }
 
     fun showCountdownFinished(context: Context, medicationName: String, note: String, countdownId: Long) {
         ensureChannels(context)
