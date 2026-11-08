@@ -93,7 +93,7 @@ object NotificationHelper {
         }
         val n = NotificationCompat.Builder(context, CHANNEL_MED_PRE)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Tra 1 ora · Farmaco da assumere")
+            .setContentTitle("Assunzione prevista alle $plannedTime")
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
@@ -132,9 +132,10 @@ object NotificationHelper {
             plannedTime = plannedTime,
             salt = "alarm-taken"
         )
+        val automaticSnooze = medication.automaticSnoozeMinutes
         val snoozePending = actionPendingIntent(
             context, medication, plannedEpochDay, plannedTime,
-            ActionReceiver.ACTION_SNOOZE, notificationId, "alarm-snooze"
+            ActionReceiver.ACTION_SNOOZE, notificationId, "alarm-snooze", automaticSnooze
         )
         val body = buildString {
             append("È ora di assumere ${medication.name}")
@@ -153,7 +154,7 @@ object NotificationHelper {
             .setContentIntent(fullScreenIntent)
             .setFullScreenIntent(fullScreenIntent, true)
             .addAction(0, "Farmaco assunto", takePending)
-            .addAction(0, "Snooze ${medication.snoozeMinutes} min", snoozePending)
+            .addAction(0, "Snooze $automaticSnooze min", snoozePending)
             .build()
     }
 
@@ -179,7 +180,8 @@ object NotificationHelper {
         plannedTime: String,
         action: String,
         notificationId: Int,
-        salt: String
+        salt: String,
+        snoozeMinutes: Int? = null
     ): PendingIntent {
         val intent = Intent(context, ActionReceiver::class.java).apply {
             this.action = action
@@ -187,6 +189,7 @@ object NotificationHelper {
             putExtra(ActionReceiver.EXTRA_EPOCH_DAY, plannedEpochDay)
             putExtra(ActionReceiver.EXTRA_TIME, plannedTime)
             putExtra(ActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            if (snoozeMinutes != null) putExtra(ActionReceiver.EXTRA_SNOOZE_MINUTES, snoozeMinutes)
         }
         return PendingIntent.getBroadcast(
             context,

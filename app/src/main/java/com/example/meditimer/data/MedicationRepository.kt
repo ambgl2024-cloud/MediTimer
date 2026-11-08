@@ -304,13 +304,21 @@ class MedicationRepository(context: Context) {
         saveArray(
             "intakes",
             getIntakes().filterNot {
-                it.medicationId == medicationId && it.plannedEpochDay == epochDay && it.plannedTime == plannedTime
+                !it.isExtra &&
+                    it.medicationId == medicationId &&
+                    it.plannedEpochDay == epochDay &&
+                    it.plannedTime == plannedTime
             }.map { it.toJson() }
         )
     }
 
     fun isTaken(medicationId: Long, epochDay: Long, plannedTime: String): Boolean =
-        getIntakes().any { it.medicationId == medicationId && it.plannedEpochDay == epochDay && it.plannedTime == plannedTime }
+        getIntakes().any {
+            !it.isExtra &&
+                it.medicationId == medicationId &&
+                it.plannedEpochDay == epochDay &&
+                it.plannedTime == plannedTime
+        }
 
     fun getPackageIntakesUsed(medication: Medication): Int {
         if (medication.packageDurationMode != PackageDurationMode.INTAKES || medication.lastPackageChangeEpochDay == null) return 0
@@ -444,6 +452,7 @@ class MedicationRepository(context: Context) {
         append('|').append(takenAtMillis)
         append('|').append(plannedEpochDay)
         append('|').append(plannedTime.trim())
+        append('|').append(if (isExtra) "EXTRA" else "PLANNED")
     }
 
     private fun <T> parseArray(key: String, mapper: (org.json.JSONObject) -> T): List<T> {

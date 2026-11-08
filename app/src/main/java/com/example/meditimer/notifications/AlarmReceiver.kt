@@ -33,7 +33,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 if (med.enabled && !repo.isTaken(med.id, plannedEpochDay, time)) {
                     // Ignoring the alarm behaves like an automatic snooze: every alarm
                     // occurrence immediately schedules the next retry.
-                    Scheduler.scheduleSnooze(context, medId, plannedEpochDay, time, med.snoozeMinutes)
+                    Scheduler.scheduleSnooze(context, medId, plannedEpochDay, time, med.automaticSnoozeMinutes)
                     AlarmPlaybackService.start(context, medId, plannedEpochDay, time)
                 } else {
                     NotificationHelper.cancelDoseNotifications(context, medId, plannedEpochDay, time)
@@ -48,7 +48,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 Scheduler.cancelOlderDoseRepeats(context, medId, plannedEpochDay, time)
 
                 if (!repo.isTaken(med.id, plannedEpochDay, time)) {
-                    Scheduler.scheduleSnooze(context, medId, plannedEpochDay, time, med.snoozeMinutes)
+                    Scheduler.scheduleSnooze(context, medId, plannedEpochDay, time, med.automaticSnoozeMinutes)
                     AlarmPlaybackService.start(context, medId, plannedEpochDay, time)
                 } else {
                     NotificationHelper.cancelDoseNotifications(context, medId, plannedEpochDay, time)

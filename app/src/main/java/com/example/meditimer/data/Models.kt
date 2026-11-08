@@ -10,6 +10,8 @@ enum class RecurrenceType { DAILY, WEEKDAYS, EVERY_N_DAYS, MONTHLY_DAYS }
 enum class PackageDurationMode { DAYS, INTAKES }
 enum class StockReminderMode { NONE, REORDER_POINT, TIME_REMAINING }
 
+val DEFAULT_SNOOZE_OPTIONS: List<Int> = listOf(5, 10, 20, 45, 60, 90)
+
 data class Medication(
     val id: Long = System.currentTimeMillis(),
     val name: String,
@@ -33,9 +35,15 @@ data class Medication(
     val countdownEnabled: Boolean = false,
     val countdownMinutes: Int = 0,
     val countdownNote: String = "",
-    val snoozeMinutes: Int = 10,
+    // snoozeMinutes is retained for backward compatibility with data written by older versions.
+    // New code uses snoozeOptions; automatic repeat always uses the shortest configured option.
+    val snoozeMinutes: Int = 5,
+    val snoozeOptions: List<Int> = DEFAULT_SNOOZE_OPTIONS,
     val enabled: Boolean = true
 ) {
+    val automaticSnoozeMinutes: Int
+        get() = snoozeOptions.filter { it > 0 }.minOrNull() ?: snoozeMinutes.coerceAtLeast(1)
+
     fun isActiveOn(date: LocalDate): Boolean {
         if (!enabled) return false
         return when (recurrenceType) {
@@ -72,13 +80,25 @@ data class Medication(
         put("countdownEnabled", countdownEnabled)
         put("countdownMinutes", countdownMinutes)
         put("countdownNote", countdownNote)
-        put("snoozeMinutes", snoozeMinutes)
+        put("snoozeMinutes", automaticSnoozeMinutes)
+        put("snoozeOptions", JSONArray(snoozeOptions.filter { it > 0 }.distinct().sorted()))
         put("enabled", enabled)
     }
 
     companion object {
         fun fromJson(o: JSONObject): Medication {
             val storedIntakes = o.optInt("packageMaxIntakes", 0).coerceAtLeast(0)
+            val legacySnooze = o.optInt("snoozeMinutes", 10).coerceAtLeast(1)
+            val storedSnoozeOptions = o.optJSONArray("snoozeOptions")
+                .toIntList()
+                .filter { it > 0 }
+                .distinct()
+                .sorted()
+            val resolvedSnoozeOptions = if (storedSnoozeOptions.isNotEmpty()) {
+                storedSnoozeOptions
+            } else {
+                (DEFAULT_SNOOZE_OPTIONS + legacySnooze).filter { it > 0 }.distinct().sorted()
+            }
             val mode = runCatching {
                 PackageDurationMode.valueOf(o.optString("packageDurationMode", ""))
             }.getOrDefault(if (storedIntakes > 0) PackageDurationMode.INTAKES else PackageDurationMode.DAYS)
@@ -109,7 +129,8 @@ data class Medication(
                 countdownEnabled = o.optBoolean("countdownEnabled", false),
                 countdownMinutes = o.optInt("countdownMinutes", 0),
                 countdownNote = o.optString("countdownNote"),
-                snoozeMinutes = o.optInt("snoozeMinutes", 10).coerceAtLeast(1),
+                snoozeMinutes = resolvedSnoozeOptions.minOrNull() ?: legacySnooze,
+                snoozeOptions = resolvedSnoozeOptions,
                 enabled = o.optBoolean("enabled", true)
             )
         }
@@ -122,9 +143,12 @@ data class IntakeEvent(
     val medicationName: String = "",
     val plannedEpochDay: Long,
     val plannedTime: String,
-    val takenAtMillis: Long
+    val takenAtMillis: Long,
+    val isExtra: Boolean = false
 ) {
-    val key: String get() = "$medicationId|$plannedEpochDay|$plannedTime"
+    // Extra intakes deliberately have their own unique key: they must never replace
+    // or satisfy a scheduled dose, even when date/time accidentally coincide.
+    val key: String get() = if (isExtra) "extra|$id" else "$medicationId|$plannedEpochDay|$plannedTime"
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -133,6 +157,7 @@ data class IntakeEvent(
         put("plannedEpochDay", plannedEpochDay)
         put("plannedTime", plannedTime)
         put("takenAtMillis", takenAtMillis)
+        put("isExtra", isExtra)
     }
 
     companion object {
@@ -144,7 +169,8 @@ data class IntakeEvent(
                 medicationName = o.optString("medicationName"),
                 plannedEpochDay = o.getLong("plannedEpochDay"),
                 plannedTime = o.getString("plannedTime"),
-                takenAtMillis = takenAt
+                takenAtMillis = takenAt,
+                isExtra = o.optBoolean("isExtra", false)
             )
         }
     }
@@ -231,4 +257,9 @@ private fun JSONArray?.toIntSet(): Set<Int> {
 private fun JSONArray?.toStringList(): List<String> {
     if (this == null) return emptyList()
     return buildList { for (i in 0 until length()) add(optString(i)) }
+}
+
+private fun JSONArray?.toIntList(): List<Int> {
+    if (this == null) return emptyList()
+    return buildList { for (i in 0 until length()) add(optInt(i)) }
 }

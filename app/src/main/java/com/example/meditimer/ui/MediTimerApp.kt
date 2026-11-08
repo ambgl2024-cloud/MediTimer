@@ -245,6 +245,11 @@ private fun AboutDialog(
 
     val changelog = remember {
         listOf(
+            "0.7.6" to listOf(
+                "Calendario: aggiunta manuale di assunzioni extra fuori dal piano, senza coprire le dosi previste.",
+                "Preavviso farmaco: mostra l'orario previsto invece della frase relativa tra 1 ora.",
+                "Snooze multipli configurabili; la sveglia propone più intervalli e l'auto-repeat usa il più breve."
+            ),
             "0.7.5" to listOf(
                 "Corretto l'aggiornamento immediato dopo Farmaco assunto dalla notifica o dalla sveglia.",
                 "La dose risulta subito Assunta nella schermata Oggi e l'evento compare immediatamente nel Calendario e nelle statistiche Storia.",
@@ -465,7 +470,7 @@ private fun GuideDialog(onFinish: () -> Unit) {
                     "Giorni della settimana: scegli i singoli giorni.",
                     "Ogni N giorni: indica l'intervallo e la data di partenza.",
                     "Giorni del mese: inserisci i giorni desiderati, ad esempio 1, 10, 20.",
-                    "Snooze tra gli avvisi: è il numero di minuti usato dal pulsante Rimanda nella notifica."
+                    "Snooze: puoi configurare più intervalli alternativi. Nella sveglia scegli quello più adatto; senza risposta viene usato automaticamente il più breve."
                 )
             ),
             GuideStep(
@@ -1203,7 +1208,10 @@ private fun MedicationListScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Icon(Icons.Default.Snooze, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Text("${med.snoozeMinutes} min", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "${med.snoozeOptions.size} snooze · min ${med.automaticSnoozeMinutes} min",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                         if (med.countdownEnabled) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2398,6 +2406,7 @@ private fun CalendarScreen(
     val intakes = remember(revision, meds) { repo.getIntakes().sortedByDescending { it.takenAtMillis } }
     val medNames = remember(meds) { meds.associate { it.id to it.name } }
     var editingEvent by remember { mutableStateOf<IntakeEvent?>(null) }
+    var showExtraIntakeDialog by remember { mutableStateOf(false) }
     var pendingImport by remember { mutableStateOf<HistoryImportPreview?>(null) }
     var confirmReplace by remember { mutableStateOf(false) }
     var importMessage by remember { mutableStateOf<String?>(null) }
@@ -2485,6 +2494,12 @@ private fun CalendarScreen(
             Column(Modifier.weight(1f)) {
                 Text("Calendario", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text("Storico delle assunzioni effettive", style = MaterialTheme.typography.bodyMedium)
+            }
+            IconButton(
+                onClick = { showExtraIntakeDialog = true },
+                enabled = meds.isNotEmpty()
+            ) {
+                Icon(Icons.Default.AddCircle, contentDescription = "Aggiungi assunzione extra")
             }
         }
 
@@ -2723,8 +2738,13 @@ private fun CalendarScreen(
                                 Column(Modifier.weight(1f)) {
                                     Text(name, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "Previsto: ${LocalDate.ofEpochDay(event.plannedEpochDay).itDate()} · ${event.plannedTime}",
-                                        style = MaterialTheme.typography.bodySmall
+                                        if (event.isExtra) {
+                                            "Assunzione extra · fuori piano"
+                                        } else {
+                                            "Previsto: ${LocalDate.ofEpochDay(event.plannedEpochDay).itDate()} · ${event.plannedTime}"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (event.isExtra) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 Icon(Icons.Default.Edit, contentDescription = "Modifica evento")
@@ -2734,6 +2754,57 @@ private fun CalendarScreen(
                 }
             }
         }
+    }
+
+
+    if (showExtraIntakeDialog) {
+        ExtraIntakeDialog(
+            medications = meds,
+            onDismiss = { showExtraIntakeDialog = false },
+            onSave = { medication, takenAtMillis ->
+                val zone = ZoneId.systemDefault()
+                val taken = Instant.ofEpochMilli(takenAtMillis).atZone(zone)
+                val actualTime = taken.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm"))
+                val event = IntakeEvent(
+                    id = System.currentTimeMillis(),
+                    medicationId = medication.id,
+                    medicationName = medication.name,
+                    plannedEpochDay = taken.toLocalDate().toEpochDay(),
+                    plannedTime = actualTime,
+                    takenAtMillis = takenAtMillis,
+                    isExtra = true
+                )
+                repo.recordIntake(event)
+
+                // An extra intake can represent a dose taken right now. Only in that case
+                // start the post-intake countdown; historical/manual backfill must not.
+                val now = System.currentTimeMillis()
+                if (
+                    medication.countdownEnabled &&
+                    medication.countdownMinutes > 0 &&
+                    kotlin.math.abs(takenAtMillis - now) <= 120_000L
+                ) {
+                    val start = now
+                    val countdown = ActiveCountdown(
+                        id = start + medication.id + event.id % 997,
+                        medicationId = medication.id,
+                        medicationName = medication.name,
+                        note = medication.countdownNote,
+                        startMillis = start,
+                        endMillis = start + medication.countdownMinutes * 60_000L,
+                        plannedEpochDay = taken.toLocalDate().toEpochDay(),
+                        plannedTime = "EXTRA:${event.id}"
+                    )
+                    repo.addCountdown(countdown)
+                    Scheduler.scheduleCountdown(context, countdown)
+                }
+
+                Scheduler.scheduleNextPackageReminder(context, medication)
+                Scheduler.scheduleNextStockReminder(context, repo.getMedication(medication.id) ?: medication)
+                showExtraIntakeDialog = false
+                refresh()
+            }
+        )
     }
 
     pendingImport?.let { preview ->
@@ -2828,7 +2899,7 @@ private fun CalendarScreen(
                 repo.getCountdownsForIntake(
                     event.medicationId,
                     event.plannedEpochDay,
-                    event.plannedTime
+                    if (event.isExtra) "EXTRA:${event.id}" else event.plannedTime
                 ).forEach { countdown ->
                     Scheduler.cancelCountdown(context, countdown)
                     repo.removeCountdown(countdown.id)
@@ -2842,7 +2913,7 @@ private fun CalendarScreen(
                 repo.getCountdownsForIntake(
                     event.medicationId,
                     event.plannedEpochDay,
-                    event.plannedTime
+                    if (event.isExtra) "EXTRA:${event.id}" else event.plannedTime
                 ).forEach { countdown ->
                     Scheduler.cancelCountdown(context, countdown)
                     repo.removeCountdown(countdown.id)
@@ -2854,6 +2925,127 @@ private fun CalendarScreen(
             }
         )
     }
+}
+
+
+@Composable
+private fun ExtraIntakeDialog(
+    medications: List<Medication>,
+    onDismiss: () -> Unit,
+    onSave: (Medication, Long) -> Unit
+) {
+    val context = LocalContext.current
+    val zone = ZoneId.systemDefault()
+    val now = remember { java.time.ZonedDateTime.now(zone) }
+    var selectedMedicationId by rememberSaveable { mutableStateOf(medications.firstOrNull()?.id) }
+    var medicationMenuExpanded by remember { mutableStateOf(false) }
+    var actualDate by remember { mutableStateOf(now.toLocalDate()) }
+    var actualTimeText by remember { mutableStateOf(now.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm"))) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val timeFormat = remember { DateTimeFormatter.ofPattern("HH:mm") }
+    val selectedMedication = medications.firstOrNull { it.id == selectedMedicationId }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Aggiungi assunzione extra") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    "Registra un'assunzione reale fuori dal piano. Non verrà usata per coprire una dose programmata.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Box {
+                    OutlinedButton(
+                        onClick = { medicationMenuExpanded = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(selectedMedication?.name ?: "Seleziona farmaco", modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    }
+                    DropdownMenu(
+                        expanded = medicationMenuExpanded,
+                        onDismissRequest = { medicationMenuExpanded = false }
+                    ) {
+                        medications.sortedBy { it.name.lowercase() }.forEach { medication ->
+                            DropdownMenuItem(
+                                text = { Text(medication.name) },
+                                onClick = {
+                                    selectedMedicationId = medication.id
+                                    medicationMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = { showDatePicker(context, actualDate) { actualDate = it } },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.CalendarMonth, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Data: ${actualDate.itDate()}")
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        showTimePicker(context, actualTimeText) { actualTimeText = it }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.AccessTime, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Ora: $actualTimeText")
+                }
+
+                TextButton(
+                    onClick = {
+                        val current = java.time.ZonedDateTime.now(zone)
+                        actualDate = current.toLocalDate()
+                        actualTimeText = current.toLocalTime().format(timeFormat)
+                    }
+                ) {
+                    Icon(Icons.Default.Schedule, contentDescription = null)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Imposta adesso")
+                }
+
+                selectedMedication?.takeIf { it.countdownEnabled }?.let {
+                    Text(
+                        "Se registri l'assunzione all'ora attuale, partirà anche il countdown di ${it.countdownMinutes} min. Inserendo un evento passato il countdown non parte.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val medication = selectedMedication
+                val actualTime = runCatching { LocalTime.parse(actualTimeText.trim(), timeFormat) }.getOrNull()
+                val millis = if (actualTime != null) {
+                    actualDate.atTime(actualTime).atZone(zone).toInstant().toEpochMilli()
+                } else null
+                val currentMillis = System.currentTimeMillis()
+                error = when {
+                    medication == null -> "Seleziona un farmaco."
+                    actualTime == null || millis == null -> "Controlla l'ora: usa HH:mm."
+                    millis > currentMillis + 60_000L -> "Un'assunzione effettiva non può essere registrata nel futuro."
+                    else -> null
+                }
+                if (error == null && medication != null && millis != null) {
+                    onSave(medication, millis)
+                }
+            }) { Text("Registra") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annulla") } }
+    )
 }
 
 @Composable
@@ -2880,7 +3072,7 @@ private fun HistoryEventDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Modifica assunzione") },
+        title = { Text(if (event.isExtra) "Modifica assunzione extra" else "Modifica assunzione") },
         text = {
             Column(
                 Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -2906,17 +3098,25 @@ private fun HistoryEventDialog(
                 )
 
                 Divider()
-                Text("Programmazione originale", fontWeight = FontWeight.Bold)
-                OutlinedButton(onClick = {
-                    showDatePicker(context, plannedDate) { plannedDate = it }
-                }) { Text("Data prevista: ${plannedDate.itDate()}") }
-                OutlinedTextField(
-                    value = plannedTimeText,
-                    onValueChange = { plannedTimeText = it },
-                    label = { Text("Ora prevista (HH:mm)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                if (event.isExtra) {
+                    Text("Assunzione extra · fuori piano", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        "Questo evento resta nello storico ma non copre né modifica alcuna assunzione prevista dal piano.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    Text("Programmazione originale", fontWeight = FontWeight.Bold)
+                    OutlinedButton(onClick = {
+                        showDatePicker(context, plannedDate) { plannedDate = it }
+                    }) { Text("Data prevista: ${plannedDate.itDate()}") }
+                    OutlinedTextField(
+                        value = plannedTimeText,
+                        onValueChange = { plannedTimeText = it },
+                        label = { Text("Ora prevista (HH:mm)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
 
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
@@ -2942,11 +3142,13 @@ private fun HistoryEventDialog(
         confirmButton = {
             Button(onClick = {
                 val actualTime = runCatching { LocalTime.parse(actualTimeText.trim(), timeFormat) }.getOrNull()
-                val plannedTime = runCatching { LocalTime.parse(plannedTimeText.trim(), timeFormat) }.getOrNull()
+                val plannedTime = if (event.isExtra) actualTime else runCatching {
+                    LocalTime.parse(plannedTimeText.trim(), timeFormat)
+                }.getOrNull()
                 error = when {
                     medicationName.isBlank() -> "Inserisci il nome del farmaco."
                     actualTime == null -> "Controlla l'ora effettiva: usa HH:mm."
-                    plannedTime == null -> "Controlla l'ora prevista: usa HH:mm."
+                    !event.isExtra && plannedTime == null -> "Controlla l'ora prevista: usa HH:mm."
                     else -> null
                 }
                 if (error == null && actualTime != null && plannedTime != null) {
@@ -2954,8 +3156,8 @@ private fun HistoryEventDialog(
                     onSave(
                         event.copy(
                             medicationName = medicationName.trim(),
-                            plannedEpochDay = plannedDate.toEpochDay(),
-                            plannedTime = plannedTime.format(timeFormat),
+                            plannedEpochDay = if (event.isExtra) actualDate.toEpochDay() else plannedDate.toEpochDay(),
+                            plannedTime = if (event.isExtra) actualTime.format(timeFormat) else plannedTime.format(timeFormat),
                             takenAtMillis = millis
                         )
                     )
@@ -2968,7 +3170,7 @@ private fun HistoryEventDialog(
 
 private fun buildHistoryCsv(intakes: List<IntakeEvent>, medNames: Map<Long, String>): String = buildString {
     append('\uFEFF')
-    appendLine("Data;Ora assunzione;Farmaco;Data prevista;Ora prevista;Timestamp;ID evento;ID farmaco")
+    appendLine("Data;Ora assunzione;Farmaco;Data prevista;Ora prevista;Timestamp;ID evento;ID farmaco;Tipo evento")
     intakes.sortedBy { it.takenAtMillis }.forEach { event ->
         val taken = Instant.ofEpochMilli(event.takenAtMillis).atZone(ZoneId.systemDefault())
         val name = event.medicationName.ifBlank { medNames[event.medicationId] ?: "Farmaco eliminato" }
@@ -2979,7 +3181,8 @@ private fun buildHistoryCsv(intakes: List<IntakeEvent>, medNames: Map<Long, Stri
         append(csvCell(event.plannedTime)).append(';')
         append(event.takenAtMillis).append(';')
         append(event.id).append(';')
-        append(event.medicationId).appendLine()
+        append(event.medicationId).append(';')
+        appendLine(if (event.isExtra) "EXTRA" else "PIANIFICATA")
     }
 }
 
@@ -3008,6 +3211,7 @@ private fun parseHistoryCsv(
     val timestampCol = col("Timestamp")
     val eventIdCol = col("ID evento", "Event ID")
     val medIdCol = col("ID farmaco", "Medication ID")
+    val eventTypeCol = col("Tipo evento", "Event type", "Tipo")
 
     require(medCol >= 0) { "Manca la colonna Farmaco." }
     require((dateCol >= 0 && actualTimeCol >= 0) || timestampCol >= 0) {
@@ -3077,7 +3281,8 @@ private fun parseHistoryCsv(
                 medicationName = name,
                 plannedEpochDay = plannedDate.toEpochDay(),
                 plannedTime = plannedTime.format(DateTimeFormatter.ofPattern("HH:mm")),
-                takenAtMillis = takenAtMillis
+                takenAtMillis = takenAtMillis,
+                isExtra = value(row, eventTypeCol).contains("extra", ignoreCase = true)
             )
         }.getOrNull()
 
@@ -3155,6 +3360,7 @@ private fun historyFingerprint(event: IntakeEvent): String = buildString {
     append('|').append(event.takenAtMillis)
     append('|').append(event.plannedEpochDay)
     append('|').append(event.plannedTime.trim())
+    append('|').append(if (event.isExtra) "EXTRA" else "PLANNED")
 }
 
 private fun csvCell(value: String): String {
@@ -3679,7 +3885,9 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
     var countdownEnabled by remember(initial) { mutableStateOf(initial?.countdownEnabled ?: false) }
     var countdownMinutes by remember(initial) { mutableStateOf((initial?.countdownMinutes?.takeIf { it > 0 } ?: 2).toString()) }
     var countdownNote by remember(initial) { mutableStateOf(initial?.countdownNote.orEmpty()) }
-    var snoozeMinutes by remember(initial) { mutableStateOf((initial?.snoozeMinutes ?: 10).toString()) }
+    var snoozeOptionsText by remember(initial) {
+        mutableStateOf((initial?.snoozeOptions ?: DEFAULT_SNOOZE_OPTIONS).joinToString(" - "))
+    }
     var error by remember { mutableStateOf<String?>(null) }
 
     fun resizeTimes(newCount: Int) {
@@ -3735,10 +3943,13 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                 Divider()
                 Text("Snooze avviso", fontWeight = FontWeight.Bold)
                 OutlinedTextField(
-                    snoozeMinutes,
-                    { snoozeMinutes = it.filter(Char::isDigit) },
-                    label = { Text("Snooze tra gli avvisi (minuti)") },
-                    supportingText = { Text("Quando premi Rimanda, l'avviso ricompare dopo questo intervallo.") },
+                    snoozeOptionsText,
+                    { snoozeOptionsText = it },
+                    label = { Text("Snooze disponibili (minuti)") },
+                    placeholder = { Text("5 - 10 - 20 - 45 - 60 - 90") },
+                    supportingText = {
+                        Text("Inserisci più intervalli separati da spazio, trattino o virgola. Nella sveglia potrai scegliere; senza risposta viene usato il più breve.")
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -3891,7 +4102,12 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                 val pIntakes = packageIntakes.toIntOrNull() ?: 0
                 val stockThreshold = stockReminderThreshold.toIntOrNull() ?: -1
                 val c = countdownMinutes.toIntOrNull() ?: 0
-                val snooze = snoozeMinutes.toIntOrNull() ?: 0
+                val snoozeOptions = snoozeOptionsText
+                    .split(Regex("[^0-9]+"))
+                    .mapNotNull { it.toIntOrNull() }
+                    .filter { it > 0 }
+                    .distinct()
+                    .sorted()
                 val monthly = parseMonthlyDays(monthlyDaysText)
                 error = when {
                     name.isBlank() -> "Inserisci il nome del farmaco."
@@ -3903,7 +4119,7 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                     packageDurationMode == PackageDurationMode.DAYS && pDays < 1 -> "La durata della confezione deve essere almeno 1 giorno."
                     packageDurationMode == PackageDurationMode.INTAKES && pIntakes < 1 -> "Il numero di assunzioni per confezione deve essere almeno 1."
                     stockReminderMode != StockReminderMode.NONE && stockThreshold < 0 -> "La soglia del reminder scorta deve essere 0 o superiore."
-                    snooze < 1 -> "Lo snooze deve essere almeno 1 minuto."
+                    snoozeOptions.isEmpty() -> "Inserisci almeno un intervallo di snooze valido."
                     countdownEnabled && c < 1 -> "Il countdown deve durare almeno 1 minuto."
                     else -> null
                 }
@@ -3937,7 +4153,8 @@ private fun MedicationEditorDialog(initial: Medication?, onDismiss: () -> Unit, 
                             countdownEnabled = countdownEnabled,
                             countdownMinutes = if (countdownEnabled) c else 0,
                             countdownNote = if (countdownEnabled) countdownNote.trim() else "",
-                            snoozeMinutes = snooze.coerceAtLeast(1),
+                            snoozeMinutes = snoozeOptions.minOrNull() ?: 5,
+                            snoozeOptions = snoozeOptions,
                             enabled = enabled
                         )
                     )

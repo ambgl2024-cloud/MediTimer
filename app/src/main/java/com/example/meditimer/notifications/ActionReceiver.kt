@@ -23,7 +23,11 @@ class ActionReceiver : BroadcastReceiver() {
                 if (!repo.isTaken(medId, epochDay, time)) {
                     // Replace the automatic retry with a snooze counted from the user's tap.
                     Scheduler.cancelSnooze(context, medId, epochDay, time)
-                    Scheduler.scheduleSnooze(context, medId, epochDay, time, med.snoozeMinutes)
+                    val selectedSnooze = intent.getIntExtra(
+                        EXTRA_SNOOZE_MINUTES,
+                        med.automaticSnoozeMinutes
+                    ).coerceAtLeast(1)
+                    Scheduler.scheduleSnooze(context, medId, epochDay, time, selectedSnooze)
                 }
             }
 
@@ -58,5 +62,6 @@ class ActionReceiver : BroadcastReceiver() {
         const val EXTRA_EPOCH_DAY = "epoch_day"
         const val EXTRA_TIME = "time"
         const val EXTRA_NOTIFICATION_ID = "notification_id"
+        const val EXTRA_SNOOZE_MINUTES = "snooze_minutes"
     }
 }

@@ -63,6 +63,9 @@ fun doseObservations(
     val format = DateTimeFormatter.ofPattern("HH:mm")
     val intakeByKey = intakes
         .asSequence()
+        // Manual extra intakes are real history events, but by definition they do not
+        // satisfy a planned dose and therefore never enter the adherence numerator.
+        .filter { !it.isExtra }
         .filter { medicationId == null || it.medicationId == medicationId }
         .associateBy { it.key }
     val observations = mutableListOf<DoseObservation>()

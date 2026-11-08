@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Check
@@ -74,7 +77,7 @@ class AlarmActivity : ComponentActivity() {
             MaterialTheme(colorScheme = lightColorScheme()) {
                 val med = medication
                 Column(
-                    modifier = Modifier.fillMaxSize().padding(28.dp),
+                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -115,17 +118,31 @@ class AlarmActivity : ComponentActivity() {
                         Spacer(Modifier.width(6.dp))
                         Text("Farmaco assunto")
                     }
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = {
-                            sendAction(ActionReceiver.ACTION_SNOOZE)
-                            finishAndRemoveTask()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Snooze, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Snooze ${med?.snoozeMinutes ?: 10} min")
+                    Spacer(Modifier.height(16.dp))
+                    Text("Rimanda di", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    val snoozeOptions = med?.snoozeOptions.orEmpty().ifEmpty { listOf(5, 10, 20, 45, 60, 90) }
+                    snoozeOptions.distinct().sorted().chunked(2).forEach { rowOptions ->
+                        androidx.compose.foundation.layout.Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            rowOptions.forEach { minutes ->
+                                OutlinedButton(
+                                    onClick = {
+                                        sendSnooze(minutes)
+                                        finishAndRemoveTask()
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Snooze, contentDescription = null)
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("$minutes min")
+                                }
+                            }
+                            if (rowOptions.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(8.dp))
                     }
                 }
             }
@@ -160,14 +177,15 @@ class AlarmActivity : ComponentActivity() {
         medication = MedicationRepository(this).getMedication(medId)
     }
 
-    private fun sendAction(action: String) {
+    private fun sendSnooze(minutes: Int) {
         val med = medication ?: return
         sendBroadcast(
             Intent(this, ActionReceiver::class.java).apply {
-                this.action = action
+                action = ActionReceiver.ACTION_SNOOZE
                 putExtra(ActionReceiver.EXTRA_MED_ID, med.id)
                 putExtra(ActionReceiver.EXTRA_EPOCH_DAY, plannedEpochDay)
                 putExtra(ActionReceiver.EXTRA_TIME, plannedTime)
+                putExtra(ActionReceiver.EXTRA_SNOOZE_MINUTES, minutes.coerceAtLeast(1))
                 putExtra(
                     ActionReceiver.EXTRA_NOTIFICATION_ID,
                     com.example.meditimer.notifications.NotificationHelper.alarmNotificationId(

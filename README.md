@@ -1,3 +1,11 @@
+# MediTimer v0.7.6
+
+Modifiche:
+- Calendario: pulsante `+` per registrare una **Assunzione extra** scegliendo farmaco, data e ora. L'evento resta fuori dal piano e non può coprire una dose programmata. Se registrato all'ora attuale, avvia l'eventuale countdown del farmaco; eventi retroattivi non avviano countdown.
+- Preavviso 1 ora prima: testo basato sull'orario assoluto previsto (es. `Assunzione prevista alle 22:30`), senza `tra 1 ora`.
+- Snooze multipli configurabili per farmaco (default 5, 10, 20, 45, 60, 90 min). La schermata sveglia mostra tutte le opzioni; l'auto-repeat senza risposta usa lo snooze più breve.
+- Compatibilità: i farmaci esistenti migrano automaticamente alla nuova lista snooze preservando anche eventuali valori personalizzati precedenti.
+
 # MediTimer v0.7.5
 
 Correzione richiesta:
